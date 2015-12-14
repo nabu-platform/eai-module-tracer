@@ -1,11 +1,19 @@
 package be.nabu.eai.module.tracer;
 
 import java.io.IOException;
+import java.io.StringReader;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+
+import javax.xml.bind.JAXBContext;
 
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
@@ -18,11 +26,19 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
+import javafx.geometry.Insets;
 import javafx.scene.Node;
+import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.Tab;
+import javafx.scene.control.TextArea;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
+import javafx.util.Callback;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,11 +46,16 @@ import org.slf4j.LoggerFactory;
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.ServerConnection;
 import be.nabu.eai.developer.api.EntryContextMenuProvider;
+import be.nabu.eai.developer.managers.JDBCServiceGUIManager;
 import be.nabu.eai.developer.managers.VMServiceGUIManager;
+import be.nabu.eai.developer.managers.base.BaseConfigurationGUIManager;
+import be.nabu.eai.developer.managers.util.SimplePropertyUpdater;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage.TraceType;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.jfx.control.tree.Tree;
+import be.nabu.jfx.control.tree.TreeCell;
+import be.nabu.jfx.control.tree.TreeCellValue;
 import be.nabu.jfx.control.tree.TreeItem;
 import be.nabu.libs.events.api.EventDispatcher;
 import be.nabu.libs.events.impl.EventDispatcherImpl;
@@ -44,10 +65,14 @@ import be.nabu.libs.http.core.CustomCookieStore;
 import be.nabu.libs.http.server.nio.MemoryMessageDataProvider;
 import be.nabu.libs.http.server.websockets.api.WebSocketMessage;
 import be.nabu.libs.http.server.websockets.api.WebSocketRequest;
+import be.nabu.libs.property.api.Property;
+import be.nabu.libs.property.api.Value;
 import be.nabu.libs.services.api.DefinedService;
 import be.nabu.libs.services.vm.api.Step;
 import be.nabu.libs.services.vm.api.StepGroup;
 import be.nabu.libs.services.vm.api.VMService;
+import be.nabu.libs.types.base.ValueImpl;
+import be.nabu.libs.types.java.BeanInstance;
 
 public class TracerContextMenu implements EntryContextMenuProvider {
 
@@ -71,7 +96,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								final Tab newTab = MainController.getInstance().newTab(id);
 								AnchorPane pane = new AnchorPane();
 								newTab.setContent(pane);
-								Tree<TraceMessage> requestTree = new Tree<TraceMessage>();
+								Tree<TraceMessage> requestTree = new Tree<TraceMessage>(new CellFactory());
 								pane.getChildren().add(requestTree);
 								AnchorPane.setLeftAnchor(requestTree, 0d);
 								AnchorPane.setRightAnchor(requestTree, 0d);
@@ -120,6 +145,153 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 			}
 		});
 	}
+
+	private static ThreadLocal<SimpleDateFormat> formatter = new ThreadLocal<SimpleDateFormat>();
+	
+	private static SimpleDateFormat getFormatter() {
+		if (formatter.get() == null) {
+			formatter.set(new SimpleDateFormat("HH:mm"));
+		}
+		return formatter.get();
+	}
+	
+	public static class CellFactory implements Callback<TreeItem<TraceMessage>, TreeCellValue<TraceMessage>> {
+		
+		private static Map<String, Set<Property<?>>> properties = new HashMap<String, Set<Property<?>>>();
+		
+		public static Set<Property<?>> getPropertiesFor(String name) {
+			if (!properties.containsKey(name)) {
+				synchronized(properties) {
+					if (!properties.containsKey(name)) {
+						try {
+							Class<?> loadClass = MainController.getInstance().getRepository().newClassLoader(null).loadClass(name);
+							properties.put(name, new HashSet<Property<?>>(BaseConfigurationGUIManager.createProperties(loadClass)));
+						}
+						catch (Exception e) {
+							e.printStackTrace();
+							// we tried...
+						}
+					}
+				}
+			}
+			return properties.get(name);
+		}
+		
+		@Override
+		public TreeCellValue<TraceMessage> call(TreeItem<TraceMessage> item) {
+			return new TreeCellValue<TraceMessage>() {
+				private ObjectProperty<TreeCell<TraceMessage>> cell = new SimpleObjectProperty<TreeCell<TraceMessage>>();
+				private HBox box = new HBox();
+				{
+					cell.addListener(new ChangeListener<TreeCell<TraceMessage>>() {
+						@Override
+						public void changed(ObservableValue<? extends TreeCell<TraceMessage>> arg0, TreeCell<TraceMessage> arg1, TreeCell<TraceMessage> arg2) {
+							arg2.getItem().itemProperty().addListener(new ChangeListener<TraceMessage>() {
+								@Override
+								public void changed(ObservableValue<? extends TraceMessage> arg0, TraceMessage arg1, TraceMessage arg2) {
+									refresh(cell.get().getItem(), arg2);
+								}
+							});
+						}
+					});
+				}
+				@Override
+				public Region getNode() {
+					if (box.getChildren().isEmpty()) {
+						refresh();
+					}
+					return box;
+				}
+				@Override
+				public ObjectProperty<TreeCell<TraceMessage>> cellProperty() {
+					return cell;
+				}
+				@Override
+				public void refresh() {
+					refresh(item, item.itemProperty().get());
+				}
+				
+				private void refresh(TreeItem<TraceMessage> item, TraceMessage message) {
+					box.getChildren().clear();
+					// it is an action that has a start & stop timestamp
+					if (message.getStarted() != null) {
+						Label label = new Label(getFormatter().format(cell.get().getItem().itemProperty().get().getStarted()));
+						label.setStyle("-fx-text-fill: #AAAAAA");
+						// it is not stopped yet
+						if (message.getStopped() != null) {
+							label.setText(label.getText() + ": " + (message.getStopped().getTime() - message.getStarted().getTime()) + "ms");
+						}
+						label.setPadding(new Insets(0, 10, 0, 5));
+						box.getChildren().add(label);
+					}
+					Label name = new Label(item.getName());
+					if (message.getReport() != null) {
+						name.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
+							@SuppressWarnings({ "rawtypes", "unchecked" })
+							@Override
+							public void handle(MouseEvent event) {
+								if (event.getClickCount() == 2) {
+									try {
+										Set<Property<?>> properties = getPropertiesFor(message.getReportType());
+										if (properties != null && !properties.isEmpty()) {
+											JAXBContext context = JAXBContext.newInstance(MainController.getInstance().getRepository().newClassLoader(null).loadClass(message.getReportType()));
+											Object unmarshal = context.createUnmarshaller().unmarshal(new StringReader(message.getReport()));
+											BeanInstance instance = new BeanInstance(unmarshal);
+											List<Value<?>> values = new ArrayList<Value<?>>();
+											for (Property<?> property : properties) {
+												values.add(new ValueImpl(property, instance.get(property.getName())));
+											}
+											JDBCServiceGUIManager.buildPopup(MainController.getInstance(), new SimplePropertyUpdater(false, properties, values.toArray(new Value[values.size()])), "Report", null);
+										}
+									}
+									catch (Exception e) {
+										e.printStackTrace();
+										// we tried...
+									}
+								}
+							}
+						});
+					}
+					else if (((TraceTreeItem) item).service != null) {
+						name.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+							@Override
+							public void handle(KeyEvent event) {
+								if (event.getCode() == KeyCode.L && event.isControlDown()) {
+									Tree<Entry> tree = MainController.getInstance().getTree();
+									TreeItem<Entry> resolve = tree.resolve(((TraceTreeItem) item).service.getId().replace(".", "/"));
+									if (resolve != null) {
+										TreeCell<Entry> treeCell = tree.getTreeCell(resolve);
+										treeCell.show();
+										treeCell.select();
+									}
+									event.consume();
+								}
+							}
+						});
+					}
+					if (message.getException() != null) {
+						name.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
+							@Override
+							public void handle(MouseEvent event) {
+								if (event.getClickCount() == 1) {
+									TextArea area = new TextArea();
+									area.setEditable(false);
+									area.setText(message.getException());
+									MainController.getInstance().getAncPipeline().getChildren().clear();
+									MainController.getInstance().getAncPipeline().getChildren().add(area);
+									AnchorPane.setLeftAnchor(area, 0d);
+									AnchorPane.setRightAnchor(area, 0d);
+									AnchorPane.setTopAnchor(area, 0d);
+									AnchorPane.setBottomAnchor(area, 0d);
+								}
+							}
+						});
+					}
+					box.getChildren().add(name);
+				}
+			};
+		}
+	}
 	
 	/**
 	 * Finds the "current" step that is active
@@ -144,6 +316,16 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 	public MenuItem getContext(Entry entry) {
 		// if it is a service, add the ability to set a trace on it
 		if (entry.isNode() && DefinedService.class.isAssignableFrom(entry.getNode().getArtifactClass())) {
+			// first clean up the websocketClients so the right menu shows the correct state
+			synchronized(websocketClients) {
+				Iterator<WebSocketClient> iterator = websocketClients.values().iterator();
+				while(iterator.hasNext()) {
+					if (iterator.next().isClosed()) {
+						iterator.remove();
+					}
+				}
+			}
+			
 			if (websocketClients.containsKey(entry.getId())) {
 				MenuItem item = new MenuItem("Stop Trace");
 				item.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
@@ -254,6 +436,9 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						}
 						if (message.getException() != null) {
 							graphic.getChildren().add(MainController.loadGraphic("error.png"));
+						}
+						if (message.getStarted() != null && message.getStopped() == null) {
+							graphic.getChildren().add(MainController.loadGraphic("types/optional.png"));
 						}
 						TraceTreeItem.this.graphic.set(graphic);
 					}
