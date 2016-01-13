@@ -1,9 +1,11 @@
 package be.nabu.eai.module.tracer;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
+import java.nio.charset.Charset;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -71,7 +73,10 @@ import be.nabu.libs.services.api.DefinedService;
 import be.nabu.libs.services.vm.api.Step;
 import be.nabu.libs.services.vm.api.StepGroup;
 import be.nabu.libs.services.vm.api.VMService;
+import be.nabu.libs.types.api.ComplexContent;
 import be.nabu.libs.types.base.ValueImpl;
+import be.nabu.libs.types.binding.api.Window;
+import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.libs.types.java.BeanInstance;
 
 public class TracerContextMenu implements EntryContextMenuProvider {
@@ -128,6 +133,10 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								}
 								// it is the "end" message of whatever current step is ongoing
 								else if (message.getStopped() != null) {
+									// inherit the pipeline from the "start" if applicable
+									if (message.getPipeline() == null) {
+										message.setPipeline(current.itemProperty().get().getPipeline());
+									}
 									current.itemProperty().set(message);
 								}
 								// else it's a new message, add it
@@ -269,24 +278,33 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							}
 						});
 					}
-					if (message.getException() != null) {
-						name.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
-							@Override
-							public void handle(MouseEvent event) {
-								if (event.getClickCount() == 1) {
-									TextArea area = new TextArea();
-									area.setEditable(false);
-									area.setText(message.getException());
-									MainController.getInstance().getAncPipeline().getChildren().clear();
-									MainController.getInstance().getAncPipeline().getChildren().add(area);
-									AnchorPane.setLeftAnchor(area, 0d);
-									AnchorPane.setRightAnchor(area, 0d);
-									AnchorPane.setTopAnchor(area, 0d);
-									AnchorPane.setBottomAnchor(area, 0d);
+					name.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
+						@Override
+						public void handle(MouseEvent event) {
+							try {
+								if (message.getPipeline() != null) {
+									DefinedService service = ((TraceTreeItem) cell.get().getItem()).getService();
+									if (service != null) {
+										XMLBinding binding = new XMLBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
+										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getPipeline().getBytes("UTF-8")), new Window[0]);
+										MainController.getInstance().showContent(unmarshal);
+									}
+									else {
+										TextArea area = new TextArea();
+										area.setEditable(false);
+										area.setText(message.getPipeline());
+										box.getChildren().add(area);
+									}
+								}
+								if (message.getException() != null) {
+									MainController.newTextContextMenu(name, message.getException());
 								}
 							}
-						});
-					}
+							catch(Exception e) {
+								e.printStackTrace();
+							}
+						}
+					});
 					box.getChildren().add(name);
 				}
 			};
@@ -503,6 +521,10 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 		@Override
 		public String getName() {
 			return name;
+		}
+
+		public DefinedService getService() {
+			return service;
 		}
 		
 	}

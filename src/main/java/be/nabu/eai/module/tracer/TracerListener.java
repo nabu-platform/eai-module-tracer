@@ -1,10 +1,12 @@
 package be.nabu.eai.module.tracer;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -44,12 +46,15 @@ import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.api.ServiceRuntimeTracker;
 import be.nabu.libs.services.api.ServiceRuntimeTrackerProvider;
 import be.nabu.libs.services.vm.api.Step;
+import be.nabu.libs.types.api.ComplexContent;
+import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.utils.io.IOUtils;
 
 public class TracerListener implements ServerListener {
 
 	private List<String> servicesToTrace = new ArrayList<String>();
 	private HTTPServer httpServer;
+	private boolean includePipeline = true;
 	
 	private static JAXBContext context; static {
 		try {
@@ -116,7 +121,8 @@ public class TracerListener implements ServerListener {
 			if (tracker == null) {
 				// check if service is in stack somewhere
 				while (runtime != null) {
-					if (runtime.getService() instanceof DefinedService && servicesToTrace.contains(((DefinedService) runtime.getService()).getId())) {
+					// the ":" is to support container artifacts
+					if (runtime.getService() instanceof DefinedService && servicesToTrace.contains(((DefinedService) runtime.getService()).getId().split(":")[0])) {
 						tracker = new TracingTracker();
 						runtime.getContext().put(getClass().getName(), tracker);
 						break;
@@ -204,6 +210,21 @@ public class TracerListener implements ServerListener {
 				serviceStack.push(((DefinedService) service).getId());
 				TraceMessage message = newMessage(TraceType.SERVICE);
 				message.setStarted(timestamp);
+				if (includePipeline) {
+					ComplexContent input = ServiceRuntime.getRuntime().getInput();
+					if (input != null) {
+						input = new StreamHiderContent(input);
+						XMLBinding binding = new XMLBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
+						ByteArrayOutputStream output = new ByteArrayOutputStream();
+						try {
+							binding.marshal(output, input);
+							message.setPipeline(new String(output.toByteArray(), "UTF-8"));
+						}
+						catch (IOException e) {
+							logger.error("Could not log pipeline", e);
+						}
+					}
+				}
 				broadcast(message);
 			}
 		}
@@ -278,6 +299,7 @@ public class TracerListener implements ServerListener {
 		private String traceId, serviceId, stepId, exception, report, reportType;
 		private Date started, stopped;
 		private TraceType type;
+		private String pipeline;
 
 		public String getTraceId() {
 			return traceId;
@@ -340,6 +362,13 @@ public class TracerListener implements ServerListener {
 		}
 		public void setStopped(Date stopped) {
 			this.stopped = stopped;
+		}
+		
+		public String getPipeline() {
+			return pipeline;
+		}
+		public void setPipeline(String pipeline) {
+			this.pipeline = pipeline;
 		}
 		
 		public void serialize(OutputStream output) {
