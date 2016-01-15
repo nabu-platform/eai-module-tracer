@@ -46,7 +46,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import be.nabu.eai.developer.MainController;
-import be.nabu.eai.developer.ServerConnection;
 import be.nabu.eai.developer.api.EntryContextMenuProvider;
 import be.nabu.eai.developer.managers.JDBCServiceGUIManager;
 import be.nabu.eai.developer.managers.VMServiceGUIManager;
@@ -55,6 +54,7 @@ import be.nabu.eai.developer.managers.util.SimplePropertyUpdater;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage.TraceType;
 import be.nabu.eai.repository.api.Entry;
+import be.nabu.eai.server.ServerConnection;
 import be.nabu.jfx.control.tree.Tree;
 import be.nabu.jfx.control.tree.TreeCell;
 import be.nabu.jfx.control.tree.TreeCellValue;
