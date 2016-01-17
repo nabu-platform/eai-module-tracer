@@ -30,6 +30,7 @@ import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.Tab;
@@ -133,10 +134,8 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								}
 								// it is the "end" message of whatever current step is ongoing
 								else if (message.getStopped() != null) {
-									// inherit the pipeline from the "start" if applicable
-									if (message.getPipeline() == null) {
-										message.setPipeline(current.itemProperty().get().getPipeline());
-									}
+									// inherit the input from the "start" if applicable
+									message.setInput(current.itemProperty().get().getInput());
 									current.itemProperty().set(message);
 								}
 								// else it's a new message, add it
@@ -278,34 +277,69 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							}
 						});
 					}
-					name.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
-						@Override
-						public void handle(MouseEvent event) {
-							try {
-								if (message.getPipeline() != null) {
+					box.getChildren().add(name);
+					if (message.getInput() != null) {
+						Button showInput = new Button("Input");
+						showInput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+							@Override
+							public void handle(ActionEvent arg0) {
+								try {
 									DefinedService service = ((TraceTreeItem) cell.get().getItem()).getService();
 									if (service != null) {
 										XMLBinding binding = new XMLBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
-										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getPipeline().getBytes("UTF-8")), new Window[0]);
+										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getInput().getBytes("UTF-8")), new Window[0]);
 										MainController.getInstance().showContent(unmarshal);
 									}
 									else {
 										TextArea area = new TextArea();
 										area.setEditable(false);
-										area.setText(message.getPipeline());
-										box.getChildren().add(area);
+										area.setText(message.getInput());
+										MainController.getInstance().getAncPipeline().getChildren().clear();
+										MainController.getInstance().getAncPipeline().getChildren().add(area);
 									}
 								}
-								if (message.getException() != null) {
-									MainController.newTextContextMenu(name, message.getException());
+								catch(Exception e) {
+									e.printStackTrace();
 								}
 							}
-							catch(Exception e) {
-								e.printStackTrace();
+						});
+						box.getChildren().add(showInput);
+					}
+					if (message.getOutput() != null) {
+						Button showOutput = new Button("Output");
+						showOutput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+							@Override
+							public void handle(ActionEvent arg0) {
+								try {
+									DefinedService service = ((TraceTreeItem) cell.get().getItem()).getService();
+									if (service != null) {
+										XMLBinding binding = new XMLBinding(service.getServiceInterface().getOutputDefinition(), Charset.forName("UTF-8"));
+										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getOutput().getBytes("UTF-8")), new Window[0]);
+										MainController.getInstance().showContent(unmarshal);
+									}
+									else {
+										TextArea area = new TextArea();
+										area.setEditable(false);
+										area.setText(message.getOutput());
+										MainController.getInstance().getAncPipeline().getChildren().clear();
+										MainController.getInstance().getAncPipeline().getChildren().add(area);
+									}
+								}
+								catch(Exception e) {
+									e.printStackTrace();
+								}
 							}
-						}
-					});
-					box.getChildren().add(name);
+						});
+						box.getChildren().add(showOutput);
+					}
+					if (message.getException() != null) {
+						name.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+							@Override
+							public void handle(KeyEvent event) {
+								MainController.newTextContextMenu(name, message.getException());
+							}
+						});
+					}
 				}
 			};
 		}

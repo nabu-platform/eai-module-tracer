@@ -47,6 +47,7 @@ import be.nabu.libs.services.api.ServiceRuntimeTracker;
 import be.nabu.libs.services.api.ServiceRuntimeTrackerProvider;
 import be.nabu.libs.services.vm.api.Step;
 import be.nabu.libs.types.api.ComplexContent;
+import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.utils.io.IOUtils;
 
@@ -212,21 +213,26 @@ public class TracerListener implements ServerListener {
 				message.setStarted(timestamp);
 				if (includePipeline) {
 					ComplexContent input = ServiceRuntime.getRuntime().getInput();
-					if (input != null) {
-						input = new StreamHiderContent(input);
-						XMLBinding binding = new XMLBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
-						ByteArrayOutputStream output = new ByteArrayOutputStream();
-						try {
-							binding.marshal(output, input);
-							message.setPipeline(new String(output.toByteArray(), "UTF-8"));
-						}
-						catch (IOException e) {
-							logger.error("Could not log pipeline", e);
-						}
-					}
+					message.setInput(marshal(service.getServiceInterface().getInputDefinition(), input));
 				}
 				broadcast(message);
 			}
+		}
+
+		private String marshal(ComplexType type, ComplexContent content) {
+			if (content != null) {
+				content = new StreamHiderContent(content);
+				XMLBinding binding = new XMLBinding(type, Charset.forName("UTF-8"));
+				ByteArrayOutputStream output = new ByteArrayOutputStream();
+				try {
+					binding.marshal(output, content);
+					return new String(output.toByteArray(), "UTF-8");
+				}
+				catch (IOException e) {
+					logger.error("Could not log pipeline", e);
+				}
+			}
+			return null;
 		}
 
 		@Override
@@ -236,6 +242,10 @@ public class TracerListener implements ServerListener {
 				serviceStack.pop();
 				message.setStarted(timestamps.pop());
 				message.setStopped(new Date());
+				if (includePipeline) {
+					ComplexContent output = ServiceRuntime.getRuntime().getOutput();
+					message.setOutput(marshal(service.getServiceInterface().getOutputDefinition(), output));
+				}
 				broadcast(message);
 			}
 		}
@@ -299,7 +309,7 @@ public class TracerListener implements ServerListener {
 		private String traceId, serviceId, stepId, exception, report, reportType;
 		private Date started, stopped;
 		private TraceType type;
-		private String pipeline;
+		private String input, output;
 
 		public String getTraceId() {
 			return traceId;
@@ -364,11 +374,17 @@ public class TracerListener implements ServerListener {
 			this.stopped = stopped;
 		}
 		
-		public String getPipeline() {
-			return pipeline;
+		public String getInput() {
+			return input;
 		}
-		public void setPipeline(String pipeline) {
-			this.pipeline = pipeline;
+		public void setInput(String input) {
+			this.input = input;
+		}
+		public String getOutput() {
+			return output;
+		}
+		public void setOutput(String output) {
+			this.output = output;
 		}
 		
 		public void serialize(OutputStream output) {
