@@ -50,7 +50,7 @@
 			<uniqueVersion>false</uniqueVersion>
 			<id>nabu</id>
 			<name>Nabu Maven Repository</name>
-			<url>http://localhost:5555</url>
+			<url>http://localhost:5555/maven</url>
 			<layout>default</layout>
 		</repository>
 	</distributionManagement>
