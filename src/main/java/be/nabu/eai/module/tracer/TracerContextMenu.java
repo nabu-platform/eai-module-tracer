@@ -172,7 +172,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				synchronized(properties) {
 					if (!properties.containsKey(name)) {
 						try {
-							Class<?> loadClass = MainController.getInstance().getRepository().newClassLoader(null).loadClass(name);
+							Class<?> loadClass = MainController.getInstance().getRepository().getClassLoader().loadClass(name);
 							properties.put(name, new HashSet<Property<?>>(BaseConfigurationGUIManager.createProperties(loadClass)));
 						}
 						catch (Exception e) {
@@ -242,7 +242,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 									try {
 										Set<Property<?>> properties = getPropertiesFor(message.getReportType());
 										if (properties != null && !properties.isEmpty()) {
-											JAXBContext context = JAXBContext.newInstance(MainController.getInstance().getRepository().newClassLoader(null).loadClass(message.getReportType()));
+											JAXBContext context = JAXBContext.newInstance(MainController.getInstance().getRepository().getClassLoader().loadClass(message.getReportType()));
 											Object unmarshal = context.createUnmarshaller().unmarshal(new StringReader(message.getReport()));
 											BeanInstance instance = new BeanInstance(unmarshal);
 											List<Value<?>> values = new ArrayList<Value<?>>();
