@@ -48,9 +48,9 @@ import org.slf4j.LoggerFactory;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.api.EntryContextMenuProvider;
-import be.nabu.eai.developer.managers.JDBCServiceGUIManager;
 import be.nabu.eai.developer.managers.base.BaseConfigurationGUIManager;
 import be.nabu.eai.developer.managers.util.SimplePropertyUpdater;
+import be.nabu.eai.developer.util.EAIDeveloperUtils;
 import be.nabu.eai.module.services.vm.VMServiceGUIManager;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage.TraceType;
@@ -249,7 +249,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 											for (Property<?> property : properties) {
 												values.add(new ValueImpl(property, instance.get(property.getName())));
 											}
-											JDBCServiceGUIManager.buildPopup(MainController.getInstance(), new SimplePropertyUpdater(false, properties, values.toArray(new Value[values.size()])), "Report", null);
+											EAIDeveloperUtils.buildPopup(MainController.getInstance(), new SimplePropertyUpdater(false, properties, values.toArray(new Value[values.size()])), "Report", null);
 										}
 									}
 									catch (Exception e) {
