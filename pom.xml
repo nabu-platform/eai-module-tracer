@@ -5,17 +5,17 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>nabu</groupId>
 	<artifactId>eai-module-tracer</artifactId>
-	<version>1.0-SNAPSHOT</version>
+	<version>${nabu-eai-module-tracer-version}</version>
 	<name>eai-module-tracer</name>
+
+	<parent>
+		<groupId>be.nabu</groupId>
+		<artifactId>core</artifactId>
+		<version>1.0-SNAPSHOT</version>
+	</parent>
 
 	<build>
 		<plugins>
-			<plugin>
-				<groupId>org.apache.felix</groupId>
-				<artifactId>maven-bundle-plugin</artifactId>
-				<version>2.3.7</version>
-				<extensions>true</extensions>
-			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
@@ -28,42 +28,26 @@
 	</build>
 
 	<dependencies>
-		<!-- The developer dependency is only necessary if you want to edit the 
-			artifacts, in production this dependency can be ignored -->
 		<dependency>
 			<groupId>be.nabu.eai</groupId>
 			<artifactId>eai-developer</artifactId>
-			<version>1.0-SNAPSHOT</version>
 			<scope>provided</scope>
 		</dependency>
 		<dependency>
 			<groupId>be.nabu.eai</groupId>
 			<artifactId>eai-server</artifactId>
-			<version>1.0-SNAPSHOT</version>
 			<scope>provided</scope>
 		</dependency>
 		<dependency>
 			<groupId>nabu</groupId>
 			<artifactId>eai-module-services-vm</artifactId>
-			<version>1.0-SNAPSHOT</version>
 			<scope>provided</scope>
 		</dependency>
 		<dependency>
 			<groupId>be.nabu.libs.services</groupId>
 			<artifactId>services-vm</artifactId>
-			<version>1.0-SNAPSHOT</version>
 			<scope>provided</scope>
 		</dependency>
 	</dependencies>
-
-	<distributionManagement>
-		<repository>
-			<uniqueVersion>false</uniqueVersion>
-			<id>nabu</id>
-			<name>Nabu Maven Repository</name>
-			<url>http://localhost:5555/maven</url>
-			<layout>default</layout>
-		</repository>
-	</distributionManagement>
 
 </project>
