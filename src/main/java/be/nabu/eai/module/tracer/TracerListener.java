@@ -45,6 +45,7 @@ import be.nabu.libs.services.api.DefinedService;
 import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.api.ServiceRuntimeTracker;
 import be.nabu.libs.services.api.ServiceRuntimeTrackerProvider;
+import be.nabu.libs.services.api.ServiceWrapper;
 import be.nabu.libs.services.vm.api.Step;
 import be.nabu.libs.types.api.ComplexContent;
 import be.nabu.libs.types.api.ComplexType;
@@ -122,8 +123,9 @@ public class TracerListener implements ServerListener {
 			if (tracker == null) {
 				// check if service is in stack somewhere
 				while (runtime != null) {
+					Service service = getService(runtime);
 					// the ":" is to support container artifacts
-					if (runtime.getService() instanceof DefinedService && servicesToTrace.contains(((DefinedService) runtime.getService()).getId().split(":")[0])) {
+					if (service instanceof DefinedService && servicesToTrace.contains(((DefinedService) service).getId().split(":")[0])) {
 						tracker = new TracingTracker();
 						runtime.getContext().put(getClass().getName(), tracker);
 						break;
@@ -133,6 +135,17 @@ public class TracerListener implements ServerListener {
 			}
 			return tracker;
 		}
+	}
+	
+	public static Service getService(ServiceRuntime runtime) {
+		return resolveService(runtime.getService());
+	}
+
+	private static Service resolveService(Service service) {
+		while (service instanceof ServiceWrapper) {
+			service = ((ServiceWrapper) service).getOriginal();
+		}
+		return service;
 	}
 	
 	public class TracingTracker implements ServiceRuntimeTracker {
@@ -153,8 +166,9 @@ public class TracerListener implements ServerListener {
 			ServiceRuntime runtime = ServiceRuntime.getRuntime();
 			// make sure we send the message to anyone listening to any of the services in the callstack
 			while (runtime != null) {
-				if (runtime.getService() instanceof DefinedService) {
-					for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) runtime.getService()).getId())) {
+				Service service = getService(runtime);
+				if (service instanceof DefinedService) {
+					for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId())) {
 						pipeline.getResponseQueue().add(message);
 					}
 				}
@@ -205,6 +219,7 @@ public class TracerListener implements ServerListener {
 
 		@Override
 		public void start(Service service) {
+			service = resolveService(service);
 			if (service instanceof DefinedService) {
 				Date timestamp = new Date();
 				timestamps.push(timestamp);
@@ -237,6 +252,7 @@ public class TracerListener implements ServerListener {
 
 		@Override
 		public void stop(Service service) {
+			service = resolveService(service);
 			if (service instanceof DefinedService) {
 				TraceMessage message = newMessage(TraceType.SERVICE);
 				serviceStack.pop();
@@ -252,6 +268,7 @@ public class TracerListener implements ServerListener {
 
 		@Override
 		public void error(Service service, Exception exception) {
+			service = resolveService(service);
 			if (service instanceof DefinedService) {
 				TraceMessage message = newMessage(TraceType.SERVICE, exception);
 				serviceStack.pop();
