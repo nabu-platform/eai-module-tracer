@@ -33,6 +33,7 @@ import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TextArea;
 import javafx.scene.input.KeyCode;
@@ -101,11 +102,16 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							if (tab == null) {
 								final Tab newTab = MainController.getInstance().newTab(id);
 								AnchorPane pane = new AnchorPane();
-								newTab.setContent(pane);
+								ScrollPane scroll = new ScrollPane();
+								newTab.setContent(scroll);
 								Tree<TraceMessage> requestTree = new Tree<TraceMessage>(new CellFactory());
 								pane.getChildren().add(requestTree);
+								scroll.setContent(pane);
 								AnchorPane.setLeftAnchor(requestTree, 0d);
 								AnchorPane.setRightAnchor(requestTree, 0d);
+								AnchorPane.setBottomAnchor(requestTree, 0d);
+								AnchorPane.setTopAnchor(requestTree, 0d);
+								pane.prefWidthProperty().bind(scroll.widthProperty());
 								requestTree.rootProperty().set(new TraceTreeItem(null, message));
 								newTab.selectedProperty().addListener(new ChangeListener<Boolean>() {
 									@Override
@@ -123,7 +129,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								if (!tab.isSelected()) {
 									tab.setText(tab.getText() + " *");
 								}
-								Tree<TraceMessage> requestTree = (Tree<TraceMessage>) ((AnchorPane) tab.getContent()).getChildren().get(0);
+								Tree<TraceMessage> requestTree = (Tree<TraceMessage>) ((AnchorPane) ((ScrollPane) tab.getContent()).getContent()).getChildren().get(0);
 								TraceTreeItem current = getCurrent(requestTree.rootProperty().get());
 								if (current == null) {
 									current = (TraceTreeItem) requestTree.rootProperty().get();
