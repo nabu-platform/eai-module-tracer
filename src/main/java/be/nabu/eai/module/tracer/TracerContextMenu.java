@@ -52,15 +52,18 @@ import be.nabu.eai.developer.api.EntryContextMenuProvider;
 import be.nabu.eai.developer.managers.base.BaseConfigurationGUIManager;
 import be.nabu.eai.developer.managers.util.SimplePropertyUpdater;
 import be.nabu.eai.developer.util.EAIDeveloperUtils;
+import be.nabu.eai.module.services.vm.StepFactory;
 import be.nabu.eai.module.services.vm.VMServiceGUIManager;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage.TraceType;
+import be.nabu.eai.repository.api.ContainerArtifact;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.server.ServerConnection;
 import be.nabu.jfx.control.tree.Tree;
 import be.nabu.jfx.control.tree.TreeCell;
 import be.nabu.jfx.control.tree.TreeCellValue;
 import be.nabu.jfx.control.tree.TreeItem;
+import be.nabu.libs.artifacts.api.Artifact;
 import be.nabu.libs.events.api.EventDispatcher;
 import be.nabu.libs.events.impl.EventDispatcherImpl;
 import be.nabu.libs.http.client.SPIAuthenticationHandler;
@@ -238,9 +241,16 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						label.setPadding(new Insets(0, 10, 0, 5));
 						box.getChildren().add(label);
 					}
-					Label name = new Label(item.getName());
+					Node node;
+					if (((TraceTreeItem) item).getStep() != null) {
+						node = new HBox();
+						StepFactory.StepCell.drawStep(((TraceTreeItem) item).getStep(), (HBox) node);
+					}
+					else {
+						node = new Label(item.getName());
+					}
 					if (message.getReport() != null) {
-						name.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
+						node.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
 							@SuppressWarnings({ "rawtypes", "unchecked" })
 							@Override
 							public void handle(MouseEvent event) {
@@ -267,7 +277,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						});
 					}
 					else if (((TraceTreeItem) item).service != null) {
-						name.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+						node.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
 							@Override
 							public void handle(KeyEvent event) {
 								if (event.getCode() == KeyCode.L && event.isControlDown()) {
@@ -283,7 +293,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							}
 						});
 					}
-					box.getChildren().add(name);
+					box.getChildren().add(node);
 					if (message.getInput() != null) {
 						Button showInput = new Button("Input");
 						showInput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
@@ -339,10 +349,10 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						box.getChildren().add(showOutput);
 					}
 					if (message.getException() != null) {
-						name.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+						node.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
 							@Override
 							public void handle(KeyEvent event) {
-								MainController.newTextContextMenu(name, message.getException());
+								MainController.newTextContextMenu(new Label(item.getName()), message.getException());
 							}
 						});
 					}
@@ -463,11 +473,27 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						// only reports are actual leafs
 						leaf.set(message.getReport() != null);
 						HBox graphic = new HBox();
+						List<VMService> services = new ArrayList<VMService>();
 						if (message.getServiceId() != null) {
 							service = (DefinedService) MainController.getInstance().getRepository().getNode(message.getServiceId()).getArtifact();
+							if (service instanceof VMService) {
+								services.add((VMService) service);
+							}
+							else if (service instanceof ContainerArtifact) {
+								for (Artifact artifact : ((ContainerArtifact) service).getContainedArtifacts()) {
+									if (artifact instanceof VMService) {
+										services.add((VMService) artifact); 
+									}
+								}
+							}
 						}
-						if (message.getStepId() != null && service instanceof VMService) {
-							step = getStep(((VMService) service).getRoot(), message.getStepId());
+						if (message.getStepId() != null) {
+							for (VMService service : services) {
+								step = getStep(service.getRoot(), message.getStepId());
+								if (step != null) {
+									break;
+								}
+							}
 						}
 						if (TraceType.SERVICE.equals(message.getType())) {
 							name = message.getServiceId();
@@ -565,6 +591,10 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 
 		public DefinedService getService() {
 			return service;
+		}
+
+		public Step getStep() {
+			return step;
 		}
 		
 	}

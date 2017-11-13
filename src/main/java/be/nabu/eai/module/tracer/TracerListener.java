@@ -226,7 +226,7 @@ public class TracerListener implements ServerListener {
 				serviceStack.push(((DefinedService) service).getId());
 				TraceMessage message = newMessage(TraceType.SERVICE);
 				message.setStarted(timestamp);
-				if (includePipeline) {
+				if (includePipeline && service.getServiceInterface() != null) {
 					ComplexContent input = ServiceRuntime.getRuntime().getInput();
 					message.setInput(marshal(service.getServiceInterface().getInputDefinition(), input));
 				}
@@ -258,7 +258,7 @@ public class TracerListener implements ServerListener {
 				serviceStack.pop();
 				message.setStarted(timestamps.pop());
 				message.setStopped(new Date());
-				if (includePipeline) {
+				if (includePipeline && service.getServiceInterface() != null) {
 					ComplexContent output = ServiceRuntime.getRuntime().getOutput();
 					message.setOutput(marshal(service.getServiceInterface().getOutputDefinition(), output));
 				}
