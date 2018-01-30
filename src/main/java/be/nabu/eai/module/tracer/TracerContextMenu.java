@@ -15,8 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import javax.xml.bind.JAXBContext;
-
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
@@ -44,6 +42,8 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Region;
 import javafx.util.Callback;
 
+import javax.xml.bind.JAXBContext;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,6 +56,7 @@ import be.nabu.eai.module.services.vm.StepFactory;
 import be.nabu.eai.module.services.vm.VMServiceGUIManager;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage;
 import be.nabu.eai.module.tracer.TracerListener.TraceMessage.TraceType;
+import be.nabu.eai.repository.RepositoryThreadFactory;
 import be.nabu.eai.repository.api.ContainerArtifact;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.server.ServerConnection;
@@ -64,14 +65,21 @@ import be.nabu.jfx.control.tree.TreeCell;
 import be.nabu.jfx.control.tree.TreeCellValue;
 import be.nabu.jfx.control.tree.TreeItem;
 import be.nabu.libs.artifacts.api.Artifact;
+import be.nabu.libs.authentication.api.Token;
 import be.nabu.libs.events.api.EventDispatcher;
 import be.nabu.libs.events.impl.EventDispatcherImpl;
+import be.nabu.libs.http.api.client.NIOHTTPClient;
 import be.nabu.libs.http.client.SPIAuthenticationHandler;
+import be.nabu.libs.http.client.nio.NIOHTTPClientImpl;
 import be.nabu.libs.http.client.websocket.WebSocketClient;
 import be.nabu.libs.http.core.CustomCookieStore;
 import be.nabu.libs.http.server.nio.MemoryMessageDataProvider;
+import be.nabu.libs.http.server.websockets.WebSocketUtils;
 import be.nabu.libs.http.server.websockets.api.WebSocketMessage;
 import be.nabu.libs.http.server.websockets.api.WebSocketRequest;
+import be.nabu.libs.http.server.websockets.impl.WebSocketRequestParserFactory;
+import be.nabu.libs.nio.api.events.ConnectionEvent;
+import be.nabu.libs.nio.api.events.ConnectionEvent.ConnectionState;
 import be.nabu.libs.property.api.Property;
 import be.nabu.libs.property.api.Value;
 import be.nabu.libs.services.api.DefinedService;
@@ -86,10 +94,37 @@ import be.nabu.libs.types.java.BeanInstance;
 
 public class TracerContextMenu implements EntryContextMenuProvider {
 
+	private Logger logger = LoggerFactory.getLogger(getClass());
 	private static EventDispatcher dispatcher = new EventDispatcherImpl();
 	private static Map<String, WebSocketClient> websocketClients = new HashMap<String, WebSocketClient>();
 	
 	static {
+		dispatcher.subscribe(ConnectionEvent.class, new be.nabu.libs.events.api.EventHandler<ConnectionEvent, Void>() {
+			@Override
+			public Void handle(ConnectionEvent event) {
+				if (ConnectionState.CLOSED.equals(event.getState())) {
+					WebSocketRequestParserFactory parserFactory = WebSocketUtils.getParserFactory(event.getPipeline());
+					if (parserFactory != null) {
+						String serviceId = parserFactory.getPath().substring("/trace/".length());
+						synchronized(clients) {
+							NIOHTTPClient client = clients.get(serviceId);
+							if (client != null) {
+								try {
+									client.close();
+								}
+								catch (IOException e) {
+									// can't really do much
+								}
+								finally {
+									clients.remove(serviceId);
+								}
+							}
+						}
+					}
+				}
+				return null;
+			}
+		});
 		dispatcher.subscribe(WebSocketRequest.class, new be.nabu.libs.events.api.EventHandler<WebSocketRequest, WebSocketMessage>() {
 			
 			@Override
@@ -120,7 +155,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 									@Override
 									public void changed(ObservableValue<? extends Boolean> arg0, Boolean arg1, Boolean arg2) {
 										if (arg2) {
-											if (newTab.getText().endsWith("*")) {
+											if (!newTab.getText().endsWith("*")) {
 												newTab.setText(newTab.getText().replaceAll("[\\s]*\\*$", ""));
 											}
 										}
@@ -129,7 +164,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								tab = newTab;
 							}
 							else {
-								if (!tab.isSelected()) {
+								if (!tab.isSelected() && !tab.getText().endsWith("*")) {
 									tab.setText(tab.getText() + " *");
 								}
 								Tree<TraceMessage> requestTree = (Tree<TraceMessage>) ((AnchorPane) ((ScrollPane) tab.getContent()).getContent()).getChildren().get(0);
@@ -380,8 +415,67 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 		return null;
 	}
 	
+	private static Map<String, NIOHTTPClient> clients = new HashMap<String, NIOHTTPClient>();
+	
 	@Override
 	public MenuItem getContext(Entry entry) {
+		if (entry.isNode() && DefinedService.class.isAssignableFrom(entry.getNode().getArtifactClass())) {
+			if (clients.containsKey(entry.getId())) {
+				MenuItem item = new MenuItem("Stop Trace");
+				item.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+					@Override
+					public void handle(ActionEvent arg0) {
+						synchronized(clients) {
+							NIOHTTPClient client = clients.get(entry.getId());
+							if (client != null) {
+								try {
+									client.close();
+								}
+								catch (IOException e) {
+									// can't really do anything
+								}
+								clients.remove(entry.getId());
+							}
+						}
+					}
+				});
+				return item;
+			}
+			else {
+				MenuItem item = new MenuItem("Start Trace");
+				item.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+					@Override
+					public void handle(ActionEvent event) {
+						synchronized(clients) {
+							if (!clients.containsKey(entry.getId())) {
+								ServerConnection server = MainController.getInstance().getServer();
+								MemoryMessageDataProvider dataProvider = new MemoryMessageDataProvider();
+								NIOHTTPClientImpl client = new NIOHTTPClientImpl(server.getContext(), 3, 3, 5, dispatcher, dataProvider, new CookieManager(new CustomCookieStore(), CookiePolicy.ACCEPT_ALL), new RepositoryThreadFactory(entry.getRepository()));
+								WebSocketUtils.allowWebsockets(client, dataProvider);
+								try {
+									WebSocketUtils.upgrade(client, server.getContext(), server.getHost(), server.getPort(), "/trace/" + entry.getId(), (Token) server.getPrincipal(), dataProvider, dispatcher, new ArrayList<String>());
+									clients.put(entry.getId(), client);
+								}
+								catch (Exception e) {
+									logger.error("Can not start trace mode for: " + entry.getId(), e);
+									try {
+										client.close();
+									}
+									catch (Exception f) {
+										// nothing to do
+									}
+								}
+							}
+						}
+					}
+				});
+				return item;
+			}
+		}
+		return null;
+	}
+	
+	public MenuItem getContext2(Entry entry) {
 		// if it is a service, add the ability to set a trace on it
 		if (entry.isNode() && DefinedService.class.isAssignableFrom(entry.getNode().getArtifactClass())) {
 			// first clean up the websocketClients so the right menu shows the correct state
