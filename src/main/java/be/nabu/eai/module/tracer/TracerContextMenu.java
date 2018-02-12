@@ -74,6 +74,7 @@ import be.nabu.libs.http.client.nio.NIOHTTPClientImpl;
 import be.nabu.libs.http.client.websocket.WebSocketClient;
 import be.nabu.libs.http.core.CustomCookieStore;
 import be.nabu.libs.http.server.nio.MemoryMessageDataProvider;
+import be.nabu.libs.http.server.websockets.WebAuthorizationType;
 import be.nabu.libs.http.server.websockets.WebSocketUtils;
 import be.nabu.libs.http.server.websockets.api.WebSocketMessage;
 import be.nabu.libs.http.server.websockets.api.WebSocketRequest;
@@ -453,7 +454,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								NIOHTTPClientImpl client = new NIOHTTPClientImpl(server.getContext(), 3, 3, 5, dispatcher, dataProvider, new CookieManager(new CustomCookieStore(), CookiePolicy.ACCEPT_ALL), new RepositoryThreadFactory(entry.getRepository()));
 								WebSocketUtils.allowWebsockets(client, dataProvider);
 								try {
-									WebSocketUtils.upgrade(client, server.getContext(), server.getHost(), server.getPort(), "/trace/" + entry.getId(), (Token) server.getPrincipal(), dataProvider, dispatcher, new ArrayList<String>());
+									WebSocketUtils.upgrade(client, server.getContext(), server.getHost(), server.getPort(), "/trace/" + entry.getId(), (Token) server.getPrincipal(), dataProvider, dispatcher, new ArrayList<String>(), WebAuthorizationType.BASIC);
 									clients.put(entry.getId(), client);
 								}
 								catch (Exception e) {
