@@ -243,7 +243,7 @@ public class TracerListener implements ServerListener {
 					binding.marshal(output, content);
 					return new String(output.toByteArray(), "UTF-8");
 				}
-				catch (IOException e) {
+				catch (Exception e) {
 					logger.error("Could not log pipeline", e);
 				}
 			}
