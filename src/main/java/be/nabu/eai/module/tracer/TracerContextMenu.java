@@ -32,7 +32,6 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
-import javafx.scene.control.Tab;
 import javafx.scene.control.TextArea;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
@@ -49,6 +48,7 @@ import org.slf4j.LoggerFactory;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.api.EntryContextMenuProvider;
+import be.nabu.eai.developer.api.NodeContainer;
 import be.nabu.eai.developer.managers.base.BaseConfigurationGUIManager;
 import be.nabu.eai.developer.managers.util.SimplePropertyUpdater;
 import be.nabu.eai.developer.util.EAIDeveloperUtils;
@@ -137,12 +137,11 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							String serviceId = event.getPath().substring("/trace/".length());
 							TraceMessage message = TraceMessage.unmarshal(event.getData());
 							String id = serviceId + " (" + message.getTraceId() + ")";
-							Tab tab = MainController.getInstance().getTab(id);
-							if (tab == null) {
-								final Tab newTab = MainController.getInstance().newTab(id);
+							NodeContainer container = MainController.getInstance().getContainer(id);
+							if (container == null) {
 								AnchorPane pane = new AnchorPane();
 								ScrollPane scroll = new ScrollPane();
-								newTab.setContent(scroll);
+								container = MainController.getInstance().newContainer(id, scroll);
 								Tree<TraceMessage> requestTree = new Tree<TraceMessage>(new CellFactory());
 								pane.getChildren().add(requestTree);
 								scroll.setContent(pane);
@@ -152,23 +151,12 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								AnchorPane.setTopAnchor(requestTree, 0d);
 								pane.prefWidthProperty().bind(scroll.widthProperty());
 								requestTree.rootProperty().set(new TraceTreeItem(null, message));
-								newTab.selectedProperty().addListener(new ChangeListener<Boolean>() {
-									@Override
-									public void changed(ObservableValue<? extends Boolean> arg0, Boolean arg1, Boolean arg2) {
-										if (arg2) {
-											if (!newTab.getText().endsWith("*")) {
-												newTab.setText(newTab.getText().replaceAll("[\\s]*\\*$", ""));
-											}
-										}
-									}
-								});
-								tab = newTab;
 							}
 							else {
-								if (!tab.isSelected() && !tab.getText().endsWith("*")) {
-									tab.setText(tab.getText() + " *");
+								if (!container.isFocused()) {
+									container.setChanged(true);
 								}
-								Tree<TraceMessage> requestTree = (Tree<TraceMessage>) ((AnchorPane) ((ScrollPane) tab.getContent()).getContent()).getChildren().get(0);
+								Tree<TraceMessage> requestTree = (Tree<TraceMessage>) ((AnchorPane) ((ScrollPane) container.getContent()).getContent()).getChildren().get(0);
 								TraceTreeItem current = getCurrent(requestTree.rootProperty().get());
 								if (current == null) {
 									current = (TraceTreeItem) requestTree.rootProperty().get();
