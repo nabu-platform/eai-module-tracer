@@ -327,6 +327,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 									DefinedService service = ((TraceTreeItem) cell.get().getItem()).getService();
 									if (service != null) {
 										XMLBinding binding = new XMLBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
+										binding.setIgnoreUndefined(true);
 										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getInput().getBytes("UTF-8")), new Window[0]);
 										MainController.getInstance().showContent(unmarshal);
 									}
