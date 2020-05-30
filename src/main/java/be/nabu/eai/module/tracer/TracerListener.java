@@ -1,7 +1,6 @@
 package be.nabu.eai.module.tracer;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
@@ -26,13 +25,17 @@ import be.nabu.eai.server.Server;
 import be.nabu.eai.server.api.ServerListener;
 import be.nabu.libs.events.api.EventHandler;
 import be.nabu.libs.events.api.EventSubscription;
+import be.nabu.libs.http.HTTPInterceptorManager;
+import be.nabu.libs.http.api.HTTPEntity;
+import be.nabu.libs.http.api.HTTPInterceptor;
 import be.nabu.libs.http.api.HTTPRequest;
 import be.nabu.libs.http.api.HTTPResponse;
 import be.nabu.libs.http.api.server.HTTPServer;
+import be.nabu.libs.http.core.HTTPUtils;
 import be.nabu.libs.http.server.HTTPServerUtils;
 import be.nabu.libs.http.server.nio.MemoryMessageDataProvider;
-import be.nabu.libs.http.server.websockets.WebSocketUtils;
 import be.nabu.libs.http.server.websockets.WebSocketHandshakeHandler;
+import be.nabu.libs.http.server.websockets.WebSocketUtils;
 import be.nabu.libs.http.server.websockets.api.OpCode;
 import be.nabu.libs.http.server.websockets.api.WebSocketMessage;
 import be.nabu.libs.http.server.websockets.api.WebSocketRequest;
@@ -41,6 +44,7 @@ import be.nabu.libs.nio.api.NIOServer;
 import be.nabu.libs.nio.api.StandardizedMessagePipeline;
 import be.nabu.libs.nio.api.events.ConnectionEvent;
 import be.nabu.libs.services.ServiceRuntime;
+import be.nabu.libs.services.TransactionCloseable;
 import be.nabu.libs.services.api.DefinedService;
 import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.api.ServiceRuntimeTracker;
@@ -126,14 +130,46 @@ public class TracerListener implements ServerListener {
 					Service service = getService(runtime);
 					// the ":" is to support container artifacts
 					if (service instanceof DefinedService && servicesToTrace.contains(((DefinedService) service).getId().split(":")[0])) {
-						tracker = new TracingTracker();
+						tracker = new TracingTracker(((DefinedService) service).getId());
+						
+						HTTPInterceptorImpl interceptor = new HTTPInterceptorImpl((TracingTracker) tracker);
+						System.out.println("Registering http interceptor " + interceptor.hashCode());
 						runtime.getContext().put(getClass().getName(), tracker);
+						
+						// make sure we unregister the interceptor when we are done
+						runtime.getExecutionContext().getTransactionContext().add(null, new TransactionCloseable(new AutoCloseable() {
+							@Override
+							public void close() throws Exception {
+								System.out.println("Unregistering http interceptor " + interceptor.hashCode());
+								HTTPInterceptorManager.unregister(interceptor);
+							}
+						}));
+						
+						// register it now
+						HTTPInterceptorManager.register(interceptor);
+						
 						break;
 					}
 					runtime = runtime.getParent();
 				}
 			}
 			return tracker;
+		}
+	}
+	
+	public static class HTTPInterceptorImpl implements HTTPInterceptor {
+		private TracingTracker tracker;
+		
+		public HTTPInterceptorImpl(TracingTracker tracker) {
+			this.tracker = tracker;
+		}
+		
+		@Override
+		public HTTPEntity intercept(HTTPEntity entity) {
+			if (entity.getContent() != null) {
+				tracker.report(HTTPUtils.toMessage(entity));
+			}
+			return null;
 		}
 	}
 	
@@ -154,6 +190,11 @@ public class TracerListener implements ServerListener {
 		private Stack<String> serviceStack = new Stack<String>();
 		private Stack<String> stepStack = new Stack<String>();
 		private Stack<Date> timestamps = new Stack<Date>();
+		private String originalServiceId = null;
+		
+		public TracingTracker(String originalServiceId) {
+			this.originalServiceId = originalServiceId;
+		}
 		
 		public void broadcast(TraceMessage message) {
 			ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -164,15 +205,23 @@ public class TracerListener implements ServerListener {
 		
 		public void broadcast(WebSocketMessage message) {
 			ServiceRuntime runtime = ServiceRuntime.getRuntime();
-			// make sure we send the message to anyone listening to any of the services in the callstack
-			while (runtime != null) {
-				Service service = getService(runtime);
-				if (service instanceof DefinedService) {
-					for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId())) {
-						pipeline.getResponseQueue().add(message);
-					}
+			// we are currently not running a service, only check the original service id this was created for
+			if (runtime == null) {
+				for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + originalServiceId)) {
+					pipeline.getResponseQueue().add(message);
 				}
-				runtime = runtime.getParent();
+			}
+			else {
+				// make sure we send the message to anyone listening to any of the services in the callstack
+				while (runtime != null) {
+					Service service = getService(runtime);
+					if (service instanceof DefinedService) {
+						for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId())) {
+							pipeline.getResponseQueue().add(message);
+						}
+					}
+					runtime = runtime.getParent();
+				}
 			}
 		}
 		

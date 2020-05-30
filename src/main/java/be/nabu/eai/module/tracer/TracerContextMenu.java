@@ -23,6 +23,7 @@ import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
@@ -87,11 +88,16 @@ import be.nabu.libs.services.api.DefinedService;
 import be.nabu.libs.services.vm.api.Step;
 import be.nabu.libs.services.vm.api.StepGroup;
 import be.nabu.libs.services.vm.api.VMService;
+import be.nabu.libs.types.SimpleTypeWrapperFactory;
 import be.nabu.libs.types.api.ComplexContent;
+import be.nabu.libs.types.base.SimpleElementImpl;
 import be.nabu.libs.types.base.ValueImpl;
 import be.nabu.libs.types.binding.api.Window;
 import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.libs.types.java.BeanInstance;
+import be.nabu.libs.types.java.BeanResolver;
+import be.nabu.libs.types.structure.Structure;
+import be.nabu.libs.types.structure.StructureInstance;
 
 public class TracerContextMenu implements EntryContextMenuProvider {
 
@@ -273,32 +279,36 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 					else {
 						node = new Label(item.getName());
 					}
+					box.getChildren().add(node);
 					if (message.getReport() != null) {
-						node.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
+						Button showReport = new Button("Show");
+						showReport.getStyleClass().add("small-button");
+						HBox.setMargin(showReport, new Insets(0, 0, 0, 5));
+						showReport.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 							@SuppressWarnings({ "rawtypes", "unchecked" })
 							@Override
-							public void handle(MouseEvent event) {
-								if (event.getClickCount() == 2) {
-									try {
-										Set<Property<?>> properties = getPropertiesFor(message.getReportType());
-										if (properties != null && !properties.isEmpty()) {
-											JAXBContext context = JAXBContext.newInstance(MainController.getInstance().getRepository().getClassLoader().loadClass(message.getReportType()));
-											Object unmarshal = context.createUnmarshaller().unmarshal(new StringReader(message.getReport()));
-											BeanInstance instance = new BeanInstance(unmarshal);
-											List<Value<?>> values = new ArrayList<Value<?>>();
-											for (Property<?> property : properties) {
-												values.add(new ValueImpl(property, instance.get(property.getName())));
-											}
-											EAIDeveloperUtils.buildPopup(MainController.getInstance(), new SimplePropertyUpdater(false, properties, values.toArray(new Value[values.size()])), "Report", null);
-										}
+							public void handle(ActionEvent event) {
+								try {
+									Set<Property<?>> properties = getPropertiesFor(message.getReportType());
+									if (properties != null && !properties.isEmpty()) {
+										JAXBContext context = JAXBContext.newInstance(MainController.getInstance().getRepository().getClassLoader().loadClass(message.getReportType()));
+										Object unmarshal = context.createUnmarshaller().unmarshal(new StringReader(message.getReport()));
+										BeanInstance instance = new BeanInstance(unmarshal);
+										MainController.getInstance().showContent(instance);
+//										List<Value<?>> values = new ArrayList<Value<?>>();
+//										for (Property<?> property : properties) {
+//											values.add(new ValueImpl(property, instance.get(property.getName())));
+//										}
+//										EAIDeveloperUtils.buildPopup(MainController.getInstance(), new SimplePropertyUpdater(true, properties, values.toArray(new Value[values.size()])), "Report", null);
 									}
-									catch (Exception e) {
-										e.printStackTrace();
-										// we tried...
-									}
+								}
+								catch (Exception e) {
+									e.printStackTrace();
+									// we tried...
 								}
 							}
 						});
+						box.getChildren().add(showReport);
 					}
 					else if (((TraceTreeItem) item).service != null) {
 						node.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
@@ -317,9 +327,10 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							}
 						});
 					}
-					box.getChildren().add(node);
 					if (message.getInput() != null) {
 						Button showInput = new Button("Input");
+						showInput.getStyleClass().add("small-button");
+						HBox.setMargin(showInput, new Insets(0, 0, 0, 5));
 						showInput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 							@Override
 							public void handle(ActionEvent arg0) {
@@ -348,22 +359,27 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 					}
 					if (message.getOutput() != null) {
 						Button showOutput = new Button("Output");
+						showOutput.getStyleClass().add("small-button");
+						HBox.setMargin(showOutput, new Insets(0, 0, 0, 5));
 						showOutput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 							@Override
 							public void handle(ActionEvent arg0) {
 								try {
 									DefinedService service = ((TraceTreeItem) cell.get().getItem()).getService();
+									boolean displayed = false;
 									if (service != null) {
 										XMLBinding binding = new XMLBinding(service.getServiceInterface().getOutputDefinition(), Charset.forName("UTF-8"));
-										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getOutput().getBytes("UTF-8")), new Window[0]);
-										MainController.getInstance().showContent(unmarshal);
+										try {
+											ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getOutput().getBytes("UTF-8")), new Window[0]);
+											MainController.getInstance().showContent(unmarshal);
+											displayed = true;
+										}
+										catch (Exception e) {
+											// ignore
+										}
 									}
-									else {
-										TextArea area = new TextArea();
-										area.setEditable(false);
-										area.setText(message.getOutput());
-										MainController.getInstance().getAncPipeline().getChildren().clear();
-										MainController.getInstance().getAncPipeline().getChildren().add(area);
+									if (!displayed) {
+										MainController.getInstance().showText(message.getOutput());
 									}
 								}
 								catch(Exception e) {
@@ -374,12 +390,22 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						box.getChildren().add(showOutput);
 					}
 					if (message.getException() != null) {
-						node.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+						Button showError = new Button("Exception");
+						showError.getStyleClass().add("small-button");
+						HBox.setMargin(showError, new Insets(0, 0, 0, 5));
+						showError.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 							@Override
-							public void handle(KeyEvent event) {
-								MainController.newTextContextMenu(new Label(item.getName()), message.getException());
+							public void handle(ActionEvent event) {
+								Structure structure = new Structure();
+								structure.setName("output");
+								structure.add(new SimpleElementImpl<String>("exception", SimpleTypeWrapperFactory.getInstance().getWrapper().wrap(String.class), structure));
+								StructureInstance instance = structure.newInstance();
+								instance.set("exception", message.getException());
+								MainController.getInstance().showContent(instance);
+//								MainController.newTextContextMenu(new Label(item.getName()), message.getException());
 							}
 						});
+						box.getChildren().add(showError);
 					}
 				}
 			};
@@ -550,12 +576,23 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 		
 		public TraceTreeItem(TraceTreeItem parent, TraceMessage message) {
 			this.parent = parent;
+			leaf.set(true);
+			children.addListener(new ListChangeListener<TreeItem<TraceMessage>>() {
+				@Override
+				public void onChanged(Change<? extends TreeItem<TraceMessage>> c) {
+					boolean stillLeaf = children.isEmpty();
+					while (c.next()) {
+						if (c.wasAdded()) {
+							stillLeaf = false;
+						}
+					}
+					leaf.set(stillLeaf);
+				}
+			});
 			item.addListener(new ChangeListener<TraceMessage>() {
 				@Override
 				public void changed(ObservableValue<? extends TraceMessage> arg0, TraceMessage arg1, TraceMessage message) {
 					try {
-						// only reports are actual leafs
-						leaf.set(message.getReport() != null);
 						HBox graphic = new HBox();
 						List<VMService> services = new ArrayList<VMService>();
 						if (message.getServiceId() != null) {
@@ -598,6 +635,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						else if (TraceType.REPORT.equals(message.getType())) {
 							name = "Report: " + message.getReportType().replaceAll("^.*\\.([^.]+)$", "$1");
 							graphic.getChildren().add(MainController.loadGraphic("types/string.gif"));
+							System.out.println("report is: " + message.getReport());
 						}
 						else {
 							name = "Unknown type: " + message.getType();
