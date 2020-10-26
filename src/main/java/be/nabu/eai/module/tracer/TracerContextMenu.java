@@ -635,7 +635,6 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						else if (TraceType.REPORT.equals(message.getType())) {
 							name = "Report: " + message.getReportType().replaceAll("^.*\\.([^.]+)$", "$1");
 							graphic.getChildren().add(MainController.loadGraphic("types/string.gif"));
-							System.out.println("report is: " + message.getReport());
 						}
 						else {
 							name = "Unknown type: " + message.getType();

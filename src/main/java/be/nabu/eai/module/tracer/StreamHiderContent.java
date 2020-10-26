@@ -5,6 +5,7 @@ import java.io.InputStream;
 
 import be.nabu.libs.types.api.ComplexContent;
 import be.nabu.libs.types.api.ComplexType;
+import be.nabu.libs.types.resultset.ResultSetWithType;
 
 public class StreamHiderContent implements ComplexContent {
 
@@ -29,6 +30,9 @@ public class StreamHiderContent implements ComplexContent {
 		Object object = content.get(path);
 		if (object instanceof InputStream) {
 			return new ByteArrayInputStream(("Instance: " + object.getClass().getName()).getBytes());
+		}
+		else if (object instanceof ResultSetWithType) {
+			return null;
 		}
 		return object;
 	}
