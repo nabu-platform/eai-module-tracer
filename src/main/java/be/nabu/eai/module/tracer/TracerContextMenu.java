@@ -28,6 +28,7 @@ import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -149,6 +150,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								ScrollPane scroll = new ScrollPane();
 								container = MainController.getInstance().newContainer(id, scroll);
 								Tree<TraceMessage> requestTree = new Tree<TraceMessage>(new CellFactory());
+								requestTree.getStyleClass().addAll("small", "tree");
 								pane.getChildren().add(requestTree);
 								scroll.setContent(pane);
 								AnchorPane.setLeftAnchor(requestTree, 0d);
@@ -230,6 +232,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				private ObjectProperty<TreeCell<TraceMessage>> cell = new SimpleObjectProperty<TreeCell<TraceMessage>>();
 				private HBox box = new HBox();
 				{
+					box.setAlignment(Pos.CENTER_LEFT);
 					cell.addListener(new ChangeListener<TreeCell<TraceMessage>>() {
 						@Override
 						public void changed(ObservableValue<? extends TreeCell<TraceMessage>> arg0, TreeCell<TraceMessage> arg1, TreeCell<TraceMessage> arg2) {
@@ -594,6 +597,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				public void changed(ObservableValue<? extends TraceMessage> arg0, TraceMessage arg1, TraceMessage message) {
 					try {
 						HBox graphic = new HBox();
+						graphic.setAlignment(Pos.CENTER);
 						List<VMService> services = new ArrayList<VMService>();
 						if (message.getServiceId() != null) {
 							service = (DefinedService) MainController.getInstance().getRepository().getNode(message.getServiceId()).getArtifact();
