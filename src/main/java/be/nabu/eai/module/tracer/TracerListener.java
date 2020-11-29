@@ -130,10 +130,10 @@ public class TracerListener implements ServerListener {
 					Service service = getService(runtime);
 					// the ":" is to support container artifacts
 					if (service instanceof DefinedService && servicesToTrace.contains(((DefinedService) service).getId().split(":")[0])) {
-						tracker = new TracingTracker(((DefinedService) service).getId());
+						tracker = new TracingTracker(((DefinedService) service).getId().split(":")[0]);
 						
 						HTTPInterceptorImpl interceptor = new HTTPInterceptorImpl((TracingTracker) tracker);
-						System.out.println("Registering http interceptor " + interceptor.hashCode());
+						System.out.println("Registering http interceptor " + interceptor.hashCode() + " for service: " + ((DefinedService) service).getId());
 						runtime.getContext().put(getClass().getName(), tracker);
 						
 						// make sure we unregister the interceptor when we are done
@@ -142,6 +142,10 @@ public class TracerListener implements ServerListener {
 							public void close() throws Exception {
 								System.out.println("Unregistering http interceptor " + interceptor.hashCode());
 								HTTPInterceptorManager.unregister(interceptor);
+								// make sure we also destroy the tracker
+								// if we reuse the serviceruntime global context within this thread, we want a new tracer to start up
+								// e.g. the rest services use the same global context for cache checks and actual runtime
+								ServiceRuntime.getRuntime().getContext().put(getClass().getName(), null);
 							}
 						}));
 						
@@ -216,7 +220,7 @@ public class TracerListener implements ServerListener {
 				while (runtime != null) {
 					Service service = getService(runtime);
 					if (service instanceof DefinedService) {
-						for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId())) {
+						for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId().split(":")[0])) {
 							pipeline.getResponseQueue().add(message);
 						}
 					}

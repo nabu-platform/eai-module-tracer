@@ -86,6 +86,7 @@ import be.nabu.libs.nio.api.events.ConnectionEvent.ConnectionState;
 import be.nabu.libs.property.api.Property;
 import be.nabu.libs.property.api.Value;
 import be.nabu.libs.services.api.DefinedService;
+import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.vm.api.Step;
 import be.nabu.libs.services.vm.api.StepGroup;
 import be.nabu.libs.services.vm.api.VMService;
@@ -600,14 +601,26 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						graphic.setAlignment(Pos.CENTER);
 						List<VMService> services = new ArrayList<VMService>();
 						if (message.getServiceId() != null) {
-							service = (DefinedService) MainController.getInstance().getRepository().getNode(message.getServiceId()).getArtifact();
-							if (service instanceof VMService) {
-								services.add((VMService) service);
+							be.nabu.eai.repository.api.Node node = MainController.getInstance().getRepository().getNode(message.getServiceId());
+							if (node == null && message.getServiceId().contains(":")) {
+								node = MainController.getInstance().getRepository().getNode(message.getServiceId().split(":")[0]);
 							}
-							else if (service instanceof ContainerArtifact) {
-								for (Artifact artifact : ((ContainerArtifact) service).getContainedArtifacts()) {
-									if (artifact instanceof VMService) {
-										services.add((VMService) artifact); 
+							if (node == null) {
+								logger.warn("Could not find service: " + message.getServiceId());
+							}
+							else if (!(node.getArtifact() instanceof Service)) {
+								logger.warn("Not a service: " + message.getServiceId());
+							}
+							else {
+								service = (DefinedService) node.getArtifact();
+								if (service instanceof VMService) {
+									services.add((VMService) service);
+								}
+								else if (service instanceof ContainerArtifact) {
+									for (Artifact artifact : ((ContainerArtifact) service).getContainedArtifacts()) {
+										if (artifact instanceof VMService) {
+											services.add((VMService) artifact); 
+										}
 									}
 								}
 							}
