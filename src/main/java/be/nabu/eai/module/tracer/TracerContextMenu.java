@@ -100,6 +100,7 @@ import be.nabu.libs.types.java.BeanInstance;
 import be.nabu.libs.types.java.BeanResolver;
 import be.nabu.libs.types.structure.Structure;
 import be.nabu.libs.types.structure.StructureInstance;
+import be.nabu.utils.io.IOUtils;
 
 public class TracerContextMenu implements EntryContextMenuProvider {
 
@@ -188,6 +189,14 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						}
 						catch (Exception e) {
 							e.printStackTrace();
+							try {
+								byte[] bytes = IOUtils.toBytes(IOUtils.wrap(event.getData()));
+								System.out.println("Trace message that could not be parsed: " + new String(bytes));
+							}
+							catch (IOException e1) {
+								// TODO Auto-generated catch block
+								e1.printStackTrace();
+							}
 						}
 					}
 				});

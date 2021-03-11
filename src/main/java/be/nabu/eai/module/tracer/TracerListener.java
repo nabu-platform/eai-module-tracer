@@ -133,14 +133,14 @@ public class TracerListener implements ServerListener {
 						tracker = new TracingTracker(((DefinedService) service).getId().split(":")[0]);
 						
 						HTTPInterceptorImpl interceptor = new HTTPInterceptorImpl((TracingTracker) tracker);
-						System.out.println("Registering http interceptor " + interceptor.hashCode() + " for service: " + ((DefinedService) service).getId());
+//						System.out.println("Registering http interceptor " + interceptor.hashCode() + " for service: " + ((DefinedService) service).getId());
 						runtime.getContext().put(getClass().getName(), tracker);
 						
 						// make sure we unregister the interceptor when we are done
 						runtime.getExecutionContext().getTransactionContext().add(null, new TransactionCloseable(new AutoCloseable() {
 							@Override
 							public void close() throws Exception {
-								System.out.println("Unregistering http interceptor " + interceptor.hashCode());
+//								System.out.println("Unregistering http interceptor " + interceptor.hashCode());
 								HTTPInterceptorManager.unregister(interceptor);
 								// make sure we also destroy the tracker
 								// if we reuse the serviceruntime global context within this thread, we want a new tracer to start up
