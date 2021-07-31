@@ -3,8 +3,10 @@ package be.nabu.eai.module.tracer;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 
+import be.nabu.libs.types.MarshalRuleFactory;
 import be.nabu.libs.types.api.ComplexContent;
 import be.nabu.libs.types.api.ComplexType;
+import be.nabu.libs.types.api.MarshalRuleProvider.MarshalRule;
 import be.nabu.libs.types.resultset.ResultSetWithType;
 
 public class StreamHiderContent implements ComplexContent {
@@ -34,7 +36,14 @@ public class StreamHiderContent implements ComplexContent {
 		else if (object instanceof ResultSetWithType) {
 			return null;
 		}
-		return object;
+		// we check the marshalling rules for this object
+		else if (object != null) {
+			MarshalRule marshalRule = MarshalRuleFactory.getInstance().getMarshalRule(object.getClass());
+			if (marshalRule == null || marshalRule == MarshalRule.ALWAYS) {
+				return object;
+			}
+		}
+		return null;
 	}
 
 }
