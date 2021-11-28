@@ -48,6 +48,11 @@
 			<artifactId>services-vm</artifactId>
 			<scope>provided</scope>
 		</dependency>
+		<dependency>
+			<groupId>be.nabu.libs.http</groupId>
+			<artifactId>http-client</artifactId>
+			<scope>provided</scope>
+		</dependency>
 	</dependencies>
 
 </project>

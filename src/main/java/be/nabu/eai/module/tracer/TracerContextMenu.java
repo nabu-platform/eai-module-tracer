@@ -1,6 +1,7 @@
 package be.nabu.eai.module.tracer;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.CookieManager;
@@ -8,6 +9,7 @@ import java.net.CookiePolicy;
 import java.nio.charset.Charset;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -32,15 +34,23 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TextField;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
 import javafx.util.Callback;
 
 import javax.xml.bind.JAXBContext;
@@ -62,6 +72,7 @@ import be.nabu.eai.repository.RepositoryThreadFactory;
 import be.nabu.eai.repository.api.ContainerArtifact;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.server.ServerConnection;
+import be.nabu.eai.server.CollaborationListener.User;
 import be.nabu.jfx.control.tree.Tree;
 import be.nabu.jfx.control.tree.TreeCell;
 import be.nabu.jfx.control.tree.TreeCellValue;
@@ -78,11 +89,14 @@ import be.nabu.libs.http.core.CustomCookieStore;
 import be.nabu.libs.http.server.nio.MemoryMessageDataProvider;
 import be.nabu.libs.http.server.websockets.WebAuthorizationType;
 import be.nabu.libs.http.server.websockets.WebSocketUtils;
+import be.nabu.libs.http.server.websockets.api.OpCode;
 import be.nabu.libs.http.server.websockets.api.WebSocketMessage;
 import be.nabu.libs.http.server.websockets.api.WebSocketRequest;
 import be.nabu.libs.http.server.websockets.impl.WebSocketRequestParserFactory;
+import be.nabu.libs.nio.api.StandardizedMessagePipeline;
 import be.nabu.libs.nio.api.events.ConnectionEvent;
 import be.nabu.libs.nio.api.events.ConnectionEvent.ConnectionState;
+import be.nabu.libs.nio.impl.NIOClientImpl;
 import be.nabu.libs.property.api.Property;
 import be.nabu.libs.property.api.Value;
 import be.nabu.libs.services.api.DefinedService;
@@ -116,20 +130,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 					WebSocketRequestParserFactory parserFactory = WebSocketUtils.getParserFactory(event.getPipeline());
 					if (parserFactory != null) {
 						String serviceId = parserFactory.getPath().substring("/trace/".length());
-						synchronized(clients) {
-							NIOHTTPClient client = clients.get(serviceId);
-							if (client != null) {
-								try {
-									client.close();
-								}
-								catch (IOException e) {
-									// can't really do much
-								}
-								finally {
-									clients.remove(serviceId);
-								}
-							}
-						}
+						stopTrace(serviceId);
 					}
 				}
 				return null;
@@ -145,28 +146,74 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						try {
 							String serviceId = event.getPath().substring("/trace/".length());
 							TraceMessage message = TraceMessage.unmarshal(event.getData());
+							// we ignore heartbeats, they are simply to keep the websocket connection alive!
+							if (TraceType.HEARTBEAT.equals(message.getType())) {
+								return;
+							}
 							String id = serviceId + " (" + message.getTraceId() + ")";
 							NodeContainer container = MainController.getInstance().getContainer(id);
 							if (container == null) {
 								AnchorPane pane = new AnchorPane();
+								VBox box = new VBox();
+								
+								TextField search = new TextField();
+								search.setPromptText("Search");
+								search.setMinWidth(300);
+								HBox searchBox = new HBox();
+								Label searchLabel = new Label("Search: ");
+								searchLabel.setPadding(new Insets(4, 10, 0, 5));
+								searchBox.setPadding(new Insets(10));
+								searchBox.setAlignment(Pos.TOP_RIGHT);
+								searchBox.getChildren().addAll(search);
+								HBox.setHgrow(searchBox, Priority.ALWAYS);
+								box.getChildren().add(searchBox);
+								
+								pane.getChildren().add(box);
+								
 								ScrollPane scroll = new ScrollPane();
-								container = MainController.getInstance().newContainer(id, scroll);
+								container = MainController.getInstance().newContainer(id, pane);
 								Tree<TraceMessage> requestTree = new Tree<TraceMessage>(new CellFactory());
+								pane.setUserData(requestTree);
 								requestTree.getStyleClass().addAll("small", "tree");
-								pane.getChildren().add(requestTree);
-								scroll.setContent(pane);
-								AnchorPane.setLeftAnchor(requestTree, 0d);
-								AnchorPane.setRightAnchor(requestTree, 0d);
-								AnchorPane.setBottomAnchor(requestTree, 0d);
-								AnchorPane.setTopAnchor(requestTree, 0d);
-								pane.prefWidthProperty().bind(scroll.widthProperty());
+								scroll.setContent(requestTree);
+								scroll.getStyleClass().add("scroll");
+								AnchorPane.setLeftAnchor(box, 0d);
+								AnchorPane.setRightAnchor(box, 0d);
+								AnchorPane.setBottomAnchor(box, 0d);
+								AnchorPane.setTopAnchor(box, 0d);
+								scroll.setFitToWidth(true);
+								
+								box.getChildren().add(scroll);
+								VBox.setVgrow(scroll, Priority.ALWAYS);
+								VBox.setVgrow(searchBox, Priority.NEVER);
+								
+								search.textProperty().addListener(new ChangeListener<String>() {
+									@Override
+									public void changed(ObservableValue<? extends String> arg0, String arg1, String arg2) {
+										unhighlight(requestTree);
+										if (arg2 != null && !arg2.trim().isEmpty()) {
+											highlight(requestTree, arg2);
+										}
+									}
+								});
+								
+//								pane.prefWidthProperty().bind(scroll.widthProperty());
 								requestTree.rootProperty().set(new TraceTreeItem(null, message));
+								final NodeContainer finalContainer = container;
+								container.getContent().focusedProperty().addListener(new ChangeListener<Boolean>() {
+									@Override
+									public void changed(ObservableValue<? extends Boolean> arg0, Boolean arg1, Boolean arg2) {
+										if (arg2 != null && arg2) {
+											finalContainer.setChanged(false);
+										}
+									}
+								});
 							}
 							else {
 								if (!container.isFocused()) {
 									container.setChanged(true);
 								}
-								Tree<TraceMessage> requestTree = (Tree<TraceMessage>) ((AnchorPane) ((ScrollPane) container.getContent()).getContent()).getChildren().get(0);
+								Tree<TraceMessage> requestTree = (Tree<TraceMessage>) container.getContent().getUserData();
 								TraceTreeItem current = getCurrent(requestTree.rootProperty().get());
 								if (current == null) {
 									current = (TraceTreeItem) requestTree.rootProperty().get();
@@ -203,6 +250,175 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				return null;
 			}
 		});
+		
+		Thread thread = new Thread(new Runnable() {
+			@Override
+			public void run() {
+				while (true) {
+					try {
+						heartbeat();
+					}
+					catch (Exception e) {
+						e.printStackTrace();
+					}
+					try {
+						// trigger a heartbeat message every minute (default timeouts are generally 2 or 5 minutes)
+						Thread.sleep(1000 * 60);
+					}
+					catch (Exception e) {
+						break;
+					}
+				}
+			}
+		});
+		thread.setName("trace-heartbeat");
+		initializeTraceTab(thread);
+	}
+	
+	public static class Tracer {
+		private String service;
+		private Date since;
+		public String getService() {
+			return service;
+		}
+		public void setService(String service) {
+			this.service = service;
+		}
+		public Date getSince() {
+			return since;
+		}
+		public void setSince(Date since) {
+			this.since = since;
+		}
+	}
+	
+	private static void initializeTraceTab(Thread thread) {
+		// make sure we are on the fx thread
+		Platform.runLater(new Runnable() {
+			@Override
+			public void run() {
+				try {
+					TabPane tabMisc = MainController.getInstance().getTabMisc();
+					Tab tab = new Tab("Traces");
+					tab.setId("traces");
+					tabMisc.getTabs().add(tab);
+					
+					lstTracer = new ListView<Tracer>();
+					lstTracer.setCellFactory(new Callback<ListView<Tracer>, ListCell<Tracer>>() {
+						@Override 
+						public ListCell<Tracer> call(ListView<Tracer> list) {
+							return new ListCell<Tracer>() {
+								private HBox box;
+								
+								@Override
+								protected void updateItem(Tracer arg0, boolean empty) {
+									super.updateItem(arg0, empty);
+									// we always set an empty text, we use graphics to display more complex stuff
+									setText(null);
+									if (arg0 == null || empty) {
+										setGraphic(null);
+									}
+									if (arg0 != null) {
+										if (box == null) {
+											box = new HBox();
+											Label label = new Label(arg0.getService());
+											label.setPadding(new Insets(10, 10, 10, 10));
+											SimpleDateFormat simpleDateFormat = new SimpleDateFormat("MMM dd, HH:mm:ss");
+											Label date = new Label(simpleDateFormat.format(arg0.getSince()));
+											date.setStyle("-fx-text-fill: #aaa");
+											date.setPadding(new Insets(10, 10, 10, 0));
+											Pane filler = new Pane();
+											Button stop = new Button("Stop");
+											stop.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+												@Override
+												public void handle(ActionEvent event) {
+													stopTrace(arg0.getService());
+												}
+											});
+											box.getChildren().addAll(label, date, filler, stop);
+											HBox.setHgrow(filler, Priority.ALWAYS);
+										}
+										setGraphic(box);
+									}
+								}
+							};
+						}
+					});
+					tab.setContent(lstTracer);
+					// we only start the thread if we have the dedicated tab
+					// if you have an old developer, this thread won't start, that's by design
+					// persistent trace modes are too invisible without the tab and too hard to track down
+					thread.start();
+				}
+				// this will fail on older developers as they are missing the getTabMisc() call!
+				catch (Throwable e) {
+					System.out.println("Trace tab not supported by this developer version");
+				}
+			}
+		});
+	}
+	
+	private static void highlight(Tree<TraceMessage> tree, String text) {
+		highlight(tree.getRootCell(), text);
+	}
+	
+	private static void highlight(TreeCell<TraceMessage> cell, String text) {
+		cell.getCellValue().getNode().getStyleClass().remove("highlightedStep");
+		TraceMessage traceMessage = cell.getItem().itemProperty().get();
+		if (text != null && !text.trim().isEmpty()) {
+			Step step = ((TraceTreeItem) cell.getItem()).getStep();
+			boolean matches = false;
+			if (step != null && VMServiceGUIManager.matches(step, text, false)) {
+				matches = true;
+			}
+			else if (step == null) {
+				if (traceMessage.getReport() != null && traceMessage.getReport().toLowerCase().contains(text.toLowerCase())) {
+					matches = true;
+				}
+				else if (traceMessage.getServiceId() != null && traceMessage.getServiceId().toLowerCase().contains(text.toLowerCase())) {
+					matches = true;
+				}
+				else if (traceMessage.getInput() != null && traceMessage.getInput().toLowerCase().contains(text.toLowerCase())) {
+					matches = true;
+				}
+				else if (traceMessage.getOutput() != null && traceMessage.getOutput().toLowerCase().contains(text.toLowerCase())) {
+					matches = true;
+				}
+			}
+			if (cell.getChildren() != null && !cell.getChildren().isEmpty()) {
+				for (TreeCell<TraceMessage> child : cell.getChildren()) {
+					highlight(child, text);
+				}
+			}
+			// children but none of them are shown in the tree (e.g. a match in a link inside a map step)
+			else if (text != null && !text.trim().isEmpty() && step instanceof StepGroup && VMServiceGUIManager.matches(step, text, true)) {
+				matches = true;
+			}
+			
+			if (matches) {
+				if (!cell.getCellValue().getNode().getStyleClass().contains("highlightedStep")) {
+					cell.getCellValue().getNode().getStyleClass().add("highlightedStep");
+				}
+				cell.show();
+			}
+		}
+	}
+	
+	private static void unhighlight(Tree<TraceMessage> tree) {
+		unhighlight(tree.getRootCell());
+	}
+	
+	private static void unhighlight(TreeCell<TraceMessage> cell) {
+		cell.getCellValue().getNode().getStyleClass().remove("highlightedStep");
+		// don't collapse the root but collapse everything else so we only have expanded that which has a match afterwards
+		if (cell.getParent() != null && cell.expandedProperty().get()) {
+			cell.expandedProperty().set(false);
+		}
+		if (cell.getChildren() != null && !cell.getChildren().isEmpty()) {
+			for (TreeCell<TraceMessage> child : cell.getChildren()) {
+				unhighlight(child);
+			}
+		}
 	}
 
 	private static ThreadLocal<SimpleDateFormat> formatter = new ThreadLocal<SimpleDateFormat>();
@@ -444,7 +660,54 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 		return null;
 	}
 	
+	private static void heartbeat() {
+		// take clone for concurrent access issues
+		Map<String, NIOHTTPClient> clientsClone = new HashMap<String, NIOHTTPClient>(clients);
+		byte[] byteArray = "heartbeat".getBytes();
+		WebSocketMessage message = WebSocketUtils.newMessage(OpCode.TEXT, true, byteArray.length, IOUtils.wrap(byteArray, true));
+		for (NIOHTTPClient client : clientsClone.values()) {
+			NIOClientImpl nioClient = ((NIOHTTPClientImpl) client).getNIOClient();
+			// get all websocket pipelines
+			List<StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage>> websocketPipelines = WebSocketUtils.getWebsocketPipelines(nioClient, null);
+			for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : websocketPipelines) {
+				pipeline.getResponseQueue().add(message);
+			}
+		}
+	}
+	
+	private static void stopTrace(String serviceId) {
+		synchronized(clients) {
+			NIOHTTPClient client = clients.get(serviceId);
+			if (client != null) {
+				try {
+					client.close();
+				}
+				catch (IOException e) {
+					// can't really do anything
+				}
+				clients.remove(serviceId);
+			}
+		}
+		Platform.runLater(new Runnable() {
+			@Override
+			public void run() {
+				if (lstTracer != null) {
+					synchronized(lstTracer) {
+						Iterator<Tracer> iterator = lstTracer.getItems().iterator();
+						while (iterator.hasNext()) {
+							Tracer next = iterator.next();
+							if (next.getService().equals(serviceId)) {
+								iterator.remove();
+							}
+						}
+					}
+				}
+			}
+		});
+	}
+	
 	private static Map<String, NIOHTTPClient> clients = new HashMap<String, NIOHTTPClient>();
+	private static ListView<Tracer> lstTracer;
 	
 	@Override
 	public MenuItem getContext(Entry entry) {
@@ -454,18 +717,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				item.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 					@Override
 					public void handle(ActionEvent arg0) {
-						synchronized(clients) {
-							NIOHTTPClient client = clients.get(entry.getId());
-							if (client != null) {
-								try {
-									client.close();
-								}
-								catch (IOException e) {
-									// can't really do anything
-								}
-								clients.remove(entry.getId());
-							}
-						}
+						stopTrace(entry.getId());
 					}
 				});
 				return item;
@@ -484,6 +736,19 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								try {
 									WebSocketUtils.upgrade(client, server.getContext(), server.getHost(), server.getPort(), "/trace/" + entry.getId(), (Token) server.getPrincipal(), dataProvider, dispatcher, new ArrayList<String>(), WebAuthorizationType.BASIC);
 									clients.put(entry.getId(), client);
+									Tracer tracer = new Tracer();
+									tracer.setService(entry.getId());
+									tracer.setSince(new Date());
+									Platform.runLater(new Runnable() {
+										@Override
+										public void run() {
+											if (lstTracer != null) {
+												synchronized(lstTracer) {
+													lstTracer.getItems().add(tracer);
+												}
+											}
+										}
+									});
 								}
 								catch (Exception e) {
 									logger.error("Can not start trace mode for: " + entry.getId(), e);

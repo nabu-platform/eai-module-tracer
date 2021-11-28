@@ -373,7 +373,8 @@ public class TracerListener implements ServerListener {
 		public enum TraceType {
 			REPORT,
 			SERVICE,
-			STEP
+			STEP,
+			HEARTBEAT
 		}
 		
 		private String traceId, serviceId, stepId, exception, report, reportType;
