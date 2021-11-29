@@ -40,9 +40,12 @@ import be.nabu.libs.http.server.websockets.api.OpCode;
 import be.nabu.libs.http.server.websockets.api.WebSocketMessage;
 import be.nabu.libs.http.server.websockets.api.WebSocketRequest;
 import be.nabu.libs.http.server.websockets.impl.WebSocketRequestParserFactory;
+import be.nabu.libs.nio.PipelineUtils;
 import be.nabu.libs.nio.api.NIOServer;
+import be.nabu.libs.nio.api.Pipeline;
 import be.nabu.libs.nio.api.StandardizedMessagePipeline;
 import be.nabu.libs.nio.api.events.ConnectionEvent;
+import be.nabu.libs.nio.impl.MessagePipelineImpl;
 import be.nabu.libs.services.ServiceRuntime;
 import be.nabu.libs.services.TransactionCloseable;
 import be.nabu.libs.services.api.DefinedService;
@@ -96,6 +99,14 @@ public class TracerListener implements ServerListener {
 							if (ConnectionEvent.ConnectionState.UPGRADED.equals(event.getState())) {
 								if (!servicesToTrace.contains(service)) {
 									servicesToTrace.add(service);
+								}
+								// we set an unlimited lifetime value for the websocket connection so it can remain open
+								// however, we leave the idle timeout, the client is sending heartbeats to keep it alive, if the client stops sending them, the connection can be cleaned up correctly
+								Pipeline pipeline = PipelineUtils.getPipeline();
+								if (pipeline instanceof MessagePipelineImpl) {
+									((MessagePipelineImpl<?,?>) pipeline).setMaxLifeTime(0l);
+									// the hearts are every minute, let's kill the connection after 5 idle minutes, regardless of server settings
+									((MessagePipelineImpl<?,?>) pipeline).setMaxIdleTime(5l*60*1000);
 								}
 							}
 							// we have a close connection, check if someone is still listening to the path

@@ -701,6 +701,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							}
 						}
 					}
+					updateTabCount();
 				}
 			}
 		});
@@ -746,6 +747,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 												synchronized(lstTracer) {
 													lstTracer.getItems().add(tracer);
 												}
+												updateTabCount();
 											}
 										}
 									});
@@ -767,6 +769,32 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 			}
 		}
 		return null;
+	}
+	
+	private static void updateTabCount() {
+		Runnable runnable = new Runnable() {
+			@Override
+			public void run() {
+				TabPane tabMisc = MainController.getInstance().getTabMisc();
+				for (Tab tab : tabMisc.getTabs()) {
+					if (tab.getId() != null && tab.getId().equals("traces")) {
+						int size = lstTracer.getItems().size();
+						if (size == 0) {
+							tab.setText("Traces");
+						}
+						else {
+							tab.setText("Traces (" + size + ")");
+						}
+					}
+				}
+			}
+		};
+		if (Platform.isFxApplicationThread()) {
+			runnable.run();
+		}
+		else {
+			Platform.runLater(runnable);
+		}
 	}
 	
 	public MenuItem getContext2(Entry entry) {
