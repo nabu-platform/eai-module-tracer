@@ -271,6 +271,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				}
 			}
 		});
+		thread.setDaemon(true);
 		thread.setName("trace-heartbeat");
 		initializeTraceTab(thread);
 	}
@@ -308,8 +309,6 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						@Override 
 						public ListCell<Tracer> call(ListView<Tracer> list) {
 							return new ListCell<Tracer>() {
-								private HBox box;
-								
 								@Override
 								protected void updateItem(Tracer arg0, boolean empty) {
 									super.updateItem(arg0, empty);
@@ -319,25 +318,23 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 										setGraphic(null);
 									}
 									if (arg0 != null) {
-										if (box == null) {
-											box = new HBox();
-											Label label = new Label(arg0.getService());
-											label.setPadding(new Insets(10, 10, 10, 10));
-											SimpleDateFormat simpleDateFormat = new SimpleDateFormat("MMM dd, HH:mm:ss");
-											Label date = new Label(simpleDateFormat.format(arg0.getSince()));
-											date.setStyle("-fx-text-fill: #aaa");
-											date.setPadding(new Insets(10, 10, 10, 0));
-											Pane filler = new Pane();
-											Button stop = new Button("Stop");
-											stop.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
-												@Override
-												public void handle(ActionEvent event) {
-													stopTrace(arg0.getService());
-												}
-											});
-											box.getChildren().addAll(label, date, filler, stop);
-											HBox.setHgrow(filler, Priority.ALWAYS);
-										}
+										HBox box = new HBox();
+										Label label = new Label(arg0.getService());
+										label.setPadding(new Insets(10, 10, 10, 10));
+										SimpleDateFormat simpleDateFormat = new SimpleDateFormat("MMM dd, HH:mm:ss");
+										Label date = new Label(simpleDateFormat.format(arg0.getSince()));
+										date.setStyle("-fx-text-fill: #aaa");
+										date.setPadding(new Insets(10, 10, 10, 0));
+										Pane filler = new Pane();
+										Button stop = new Button("Stop");
+										stop.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+											@Override
+											public void handle(ActionEvent event) {
+												stopTrace(arg0.getService());
+											}
+										});
+										box.getChildren().addAll(label, date, filler, stop);
+										HBox.setHgrow(filler, Priority.ALWAYS);
 										setGraphic(box);
 									}
 								}
