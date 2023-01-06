@@ -1,28 +1,29 @@
 package be.nabu.eai.module.tracer;
 
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Stack;
 import java.util.UUID;
 
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
-import javax.xml.bind.annotation.XmlRootElement;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import be.nabu.eai.module.tracer.TracerListener.TraceMessage.TraceType;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.server.Server;
 import be.nabu.eai.server.api.ServerListener;
+import be.nabu.libs.authentication.api.Token;
+import be.nabu.libs.converter.ConverterFactory;
 import be.nabu.libs.events.api.EventHandler;
 import be.nabu.libs.events.api.EventSubscription;
 import be.nabu.libs.http.HTTPInterceptorManager;
@@ -36,12 +37,10 @@ import be.nabu.libs.http.server.HTTPServerUtils;
 import be.nabu.libs.http.server.nio.MemoryMessageDataProvider;
 import be.nabu.libs.http.server.websockets.WebSocketHandshakeHandler;
 import be.nabu.libs.http.server.websockets.WebSocketUtils;
-import be.nabu.libs.http.server.websockets.api.OpCode;
 import be.nabu.libs.http.server.websockets.api.WebSocketMessage;
 import be.nabu.libs.http.server.websockets.api.WebSocketRequest;
 import be.nabu.libs.http.server.websockets.impl.WebSocketRequestParserFactory;
 import be.nabu.libs.nio.PipelineUtils;
-import be.nabu.libs.nio.api.NIOServer;
 import be.nabu.libs.nio.api.Pipeline;
 import be.nabu.libs.nio.api.StandardizedMessagePipeline;
 import be.nabu.libs.nio.api.events.ConnectionEvent;
@@ -50,36 +49,75 @@ import be.nabu.libs.services.ServiceRuntime;
 import be.nabu.libs.services.TransactionCloseable;
 import be.nabu.libs.services.api.DefinedService;
 import be.nabu.libs.services.api.Service;
+import be.nabu.libs.services.api.ServiceException;
 import be.nabu.libs.services.api.ServiceRuntimeTracker;
 import be.nabu.libs.services.api.ServiceRuntimeTrackerProvider;
 import be.nabu.libs.services.api.ServiceWrapper;
 import be.nabu.libs.services.vm.api.Step;
+import be.nabu.libs.services.vm.step.Link;
+import be.nabu.libs.services.vm.step.Throw;
+import be.nabu.libs.types.ComplexContentWrapperFactory;
+import be.nabu.libs.types.SimpleTypeWrapperFactory;
 import be.nabu.libs.types.api.ComplexContent;
 import be.nabu.libs.types.api.ComplexType;
+import be.nabu.libs.types.api.DefinedSimpleType;
+import be.nabu.libs.types.api.DefinedType;
+import be.nabu.libs.types.binding.json.JSONBinding;
 import be.nabu.libs.types.binding.xml.XMLBinding;
-import be.nabu.utils.io.IOUtils;
 
 public class TracerListener implements ServerListener {
 
-	private List<String> servicesToTrace = new ArrayList<String>();
+	private Map<String, Runnable> websocketSubscriptions = new HashMap<String, Runnable>();
+	
 	private HTTPServer httpServer;
 	private boolean includePipeline = true;
 	
-	private static JAXBContext context; static {
-		try {
-			context = JAXBContext.newInstance(TraceMessage.class);
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			throw new RuntimeException(e);
-		}
+	// all the active tracing profiles, grouped by the service they are aimed at
+	private Map<String, List<TraceProfile>> tracingProfiles = new HashMap<String, List<TraceProfile>>();
+	
+	private static TracerListener instance;
+	
+	public static TracerListener getInstance() {
+		return instance;
 	}
 	
 	private Logger logger = LoggerFactory.getLogger(getClass());
 	
+	public Runnable registerProfile(TraceProfile profile) {
+		List<TraceProfile> list = tracingProfiles.get(profile.getServiceId());
+		if (list == null) {
+			list = new ArrayList<TraceProfile>();
+			synchronized(tracingProfiles) {
+				tracingProfiles.put(profile.getServiceId(), list);
+			}
+		}
+		synchronized(list) {
+			list.add(profile);
+		}
+		return new Runnable() {
+			@Override
+			public void run() {
+				List<TraceProfile> list = tracingProfiles.get(profile.getServiceId());
+				if (list != null) {
+					synchronized(list) {
+						list.remove(profile);
+					}
+					// clear the list from the map
+					if (list.isEmpty()) {
+						synchronized(tracingProfiles) {
+							tracingProfiles.remove(profile.getServiceId());
+						}
+					}
+				}
+			}
+		};
+	}
+	
 	@Override
 	public void listen(Server server, HTTPServer httpServer) {
 		this.httpServer = httpServer;
+		// there should only be one active instance
+		instance = this;
 		// set up a web socket listener where we can send the data for a service call
 		WebSocketHandshakeHandler websocketHandshakeHandler = new WebSocketHandshakeHandler(httpServer.getDispatcher(), new MemoryMessageDataProvider(1024*1024*10), false);
 		websocketHandshakeHandler.setRequireUpgrade(true);
@@ -97,8 +135,13 @@ public class TracerListener implements ServerListener {
 						if (!service.isEmpty()) {
 							// we have a new websocket connection to the path, add the service if not in the list yet
 							if (ConnectionEvent.ConnectionState.UPGRADED.equals(event.getState())) {
-								if (!servicesToTrace.contains(service)) {
-									servicesToTrace.add(service);
+								if (!websocketSubscriptions.containsKey(service)) {
+									TraceProfile profile = new TraceProfile();
+									profile.setBroadcaster(new WebsocketBroadcaster(httpServer, service));
+									profile.setRecursive(true);
+									profile.setServiceId(service);
+									websocketSubscriptions.put(service, registerProfile(profile));
+									logger.info("Added websocket tracer for: " + service);
 								}
 								// we set an unlimited lifetime value for the websocket connection so it can remain open
 								// however, we leave the idle timeout, the client is sending heartbeats to keep it alive, if the client stops sending them, the connection can be cleaned up correctly
@@ -116,7 +159,11 @@ public class TracerListener implements ServerListener {
 								pipelinesOnPath.remove(event.getPipeline());
 								// if noone else is left, remove the service
 								if (pipelinesOnPath.isEmpty()) {
-									servicesToTrace.remove(service);
+									Runnable removedSubscription = websocketSubscriptions.remove(service);
+									if (removedSubscription != null) {
+										removedSubscription.run();
+										logger.info("Removing websocket subscription for trace on " + service);
+									}
 								}
 							}
 						}
@@ -133,41 +180,105 @@ public class TracerListener implements ServerListener {
 	public class TracingTrackerProvider implements ServiceRuntimeTrackerProvider {
 		@Override
 		public ServiceRuntimeTracker getTracker(ServiceRuntime runtime) {
-			ServiceRuntimeTracker tracker = (ServiceRuntimeTracker) runtime.getContext().get(getClass().getName());
-			// make sure we only have one tracer per runtime context
-			if (tracker == null) {
-				// check if service is in stack somewhere
-				while (runtime != null) {
-					Service service = getService(runtime);
-					// the ":" is to support container artifacts
-					if (service instanceof DefinedService && servicesToTrace.contains(((DefinedService) service).getId().split(":")[0])) {
-						tracker = new TracingTracker(((DefinedService) service).getId().split(":")[0]);
-						
-						HTTPInterceptorImpl interceptor = new HTTPInterceptorImpl((TracingTracker) tracker);
-//						System.out.println("Registering http interceptor " + interceptor.hashCode() + " for service: " + ((DefinedService) service).getId());
-						runtime.getContext().put(getClass().getName(), tracker);
-						
-						// make sure we unregister the interceptor when we are done
-						runtime.getExecutionContext().getTransactionContext().add(null, new TransactionCloseable(new AutoCloseable() {
-							@Override
-							public void close() throws Exception {
-//								System.out.println("Unregistering http interceptor " + interceptor.hashCode());
-								HTTPInterceptorManager.unregister(interceptor);
-								// make sure we also destroy the tracker
-								// if we reuse the serviceruntime global context within this thread, we want a new tracer to start up
-								// e.g. the rest services use the same global context for cache checks and actual runtime
-								ServiceRuntime.getRuntime().getContext().put(getClass().getName(), null);
-							}
-						}));
-						
-						// register it now
-						HTTPInterceptorManager.register(interceptor);
-						
-						break;
-					}
-					runtime = runtime.getParent();
+			// let's see if we have a tracker already 
+			TracingTracker tracker = (TracingTracker) runtime.getContext().get(getClass().getName());
+			
+			// we need to check if there are any active trace profiles
+			List<TraceProfile> activeProfiles = new ArrayList<TraceProfile>();
+			
+			ServiceRuntime runtimeToScan = runtime;
+			while (runtimeToScan != null) {
+				// while scanning the runtimes, also check if we have a tracker at that level because (comment taken from another bit of code that was refactored but still applies)
+				// @2022-11-09: we had tracker explosion on the new v2 login rest call because it called web application authenticate which reinitializes global context stuff
+				// due to this, the tracker could not be found at the correct level and we have trackers at every level
+				// in such a case, by walking up the service runtime tree, we should find the active tracker
+				// at the moment we believe this is what we want. the reinitializing of the context seems faulty as well
+				if (tracker == null) {
+					tracker = (TracingTracker) runtimeToScan.getContext().get(getClass().getName());
 				}
+				Service service = getService(runtimeToScan);
+				String originalServiceId = ((DefinedService) service).getId().split(":")[0];
+				if (tracingProfiles.containsKey(originalServiceId)) {
+					activeProfiles.addAll(tracingProfiles.get(originalServiceId));
+				}
+				runtimeToScan = runtimeToScan.getParent();
 			}
+			// if we don't have a tracker, but we do have active profiles, start one
+			if (tracker == null && !activeProfiles.isEmpty()) {
+				logger.info("Creating new tracer for profiles: " + activeProfiles);
+				tracker = new TracingTracker();
+				tracker.setCorrelationId(runtime.getCorrelationId());
+				tracker.setToken(runtime.getExecutionContext().getSecurityContext().getToken());
+				HTTPInterceptorImpl interceptor = new HTTPInterceptorImpl((TracingTracker) tracker);
+				runtime.getContext().put(getClass().getName(), tracker);
+				// make sure we unregister the interceptor when we are done
+				runtime.getExecutionContext().getTransactionContext().add(null, new TransactionCloseable(new AutoCloseable() {
+					@Override
+					public void close() throws Exception {
+						HTTPInterceptorManager.unregister();
+						// make sure we also destroy the tracker
+						// if we reuse the serviceruntime global context within this thread, we want a new tracer to start up
+						// e.g. the rest services use the same global context for cache checks and actual runtime
+						ServiceRuntime.getRuntime().getContext().put(getClass().getName(), null);
+					}
+				}));
+				HTTPInterceptorManager.register(interceptor);
+			}
+			// if we do have a tracker but no active profiles, stop the tracker
+			// in most cases an active tracker does not impact much because the vast majority of services are shortlived (as are their attached trackers)
+			// but sometimes we do track daemons for a period or large batch services and we want to make sure the trackers are destroyed if we are no longer interested
+			else if (tracker != null && activeProfiles.isEmpty()) {
+				logger.info("Disabling active tracer because no active profiles remain");
+				HTTPInterceptorManager.unregister();
+				runtime.getContext().put(getClass().getName(), null);
+				tracker = null;
+			}
+			// if we have a tracker at this point, let's update its active profile list
+			if (tracker != null) {
+				// update correlation id in case it changes (unlikely)
+				tracker.setCorrelationId(runtime.getCorrelationId());
+				tracker.setActiveProfiles(activeProfiles);
+			}
+			
+			// make sure we only have one tracer per runtime context
+//			if (tracker == null) {
+//				// check if service is in stack somewhere
+//				while (runtime != null && tracker == null) {
+//					tracker = (ServiceRuntimeTracker) runtime.getContext().get(getClass().getName());
+//					
+//					Service service = getService(runtime);
+//					String originalServiceId = ((DefinedService) service).getId().split(":")[0];
+//					// the ":" is to support container artifacts
+//					if (service instanceof DefinedService && tracingProfiles.containsKey(originalServiceId) && tracker == null) {
+//						logger.info("Starting new tracer on " + originalServiceId);
+//						tracker = new TracingTracker();
+//						
+////						((TracingTracker) tracker).addBroadcaster(new WebsocketBroadcaster(httpServer, originalServiceId));
+//						
+//						HTTPInterceptorImpl interceptor = new HTTPInterceptorImpl((TracingTracker) tracker);
+////						System.out.println("Registering http interceptor " + interceptor.hashCode() + " for service: " + ((DefinedService) service).getId());
+//						runtime.getContext().put(getClass().getName(), tracker);
+//						
+//						// make sure we unregister the interceptor when we are done
+//						runtime.getExecutionContext().getTransactionContext().add(null, new TransactionCloseable(new AutoCloseable() {
+//							@Override
+//							public void close() throws Exception {
+////								System.out.println("Unregistering http interceptor " + interceptor.hashCode());
+//								HTTPInterceptorManager.unregister(interceptor);
+//								// make sure we also destroy the tracker
+//								// if we reuse the serviceruntime global context within this thread, we want a new tracer to start up
+//								// e.g. the rest services use the same global context for cache checks and actual runtime
+//								ServiceRuntime.getRuntime().getContext().put(getClass().getName(), null);
+//							}
+//						}));
+//						
+//						// register it now
+//						HTTPInterceptorManager.register(interceptor);
+//						break;
+//					}
+//					runtime = runtime.getParent();
+//				}
+//			}
 			return tracker;
 		}
 	}
@@ -201,44 +312,73 @@ public class TracerListener implements ServerListener {
 	
 	public class TracingTracker implements ServiceRuntimeTracker {
 
+		// for sequential listing of messages without having to rely on dates
+		private long messageCounter;
 		private String id = UUID.randomUUID().toString().replace("-", "");
 		private Stack<String> serviceStack = new Stack<String>();
 		private Stack<String> stepStack = new Stack<String>();
 		private Stack<Date> timestamps = new Stack<Date>();
-		private String originalServiceId = null;
+		private List<TraceProfile> activeProfiles;
+		private Charset charset = Charset.forName("UTF-8");
+		private String correlationId;
+		private Token token;
 		
-		public TracingTracker(String originalServiceId) {
-			this.originalServiceId = originalServiceId;
-		}
+		// for this particular instance of the tracker, we want to know which trace profiles have already received a hello message
+		private List<TraceProfile> alreadyHello = new ArrayList<TraceProfile>();
 		
 		public void broadcast(TraceMessage message) {
-			ByteArrayOutputStream output = new ByteArrayOutputStream();
-			message.serialize(output);
-			byte[] byteArray = output.toByteArray();
-			broadcast(WebSocketUtils.newMessage(OpCode.TEXT, true, byteArray.length, IOUtils.wrap(byteArray, true)));
+			if (activeProfiles != null && !activeProfiles.isEmpty()) {
+				for (TraceProfile profile : activeProfiles) {
+					// this should not be multithreaded because a tracer is limited to a single thread
+					if (profile.isHello() && !alreadyHello.contains(profile)) {
+						TraceMessage hello = new TraceMessage();
+						hello.configureFor(profile);
+						hello.setStarted(new Date());
+						hello.setTraceId(id);
+						hello.setServiceId(profile.getServiceId());
+						hello.setType(TraceType.START);
+						hello.setCorrelationId(correlationId);
+						if (token != null) {
+							hello.setAlias(token.getName());
+							hello.setRealm(token.getRealm());
+							hello.setAuthenticationId(token.getAuthenticationId());
+							hello.setImpersonator(token.getImpersonator());
+							hello.setImpersonatorId(token.getImpersonatorId());
+							hello.setAuthenticator(token.getAuthenticator());
+						}
+						profile.getBroadcaster().broadcast(serviceStack, hello);
+						alreadyHello.add(profile);
+					}
+					profile.getBroadcaster().broadcast(serviceStack, message.cloneFor(profile));
+				}
+			}
+//			ByteArrayOutputStream output = new ByteArrayOutputStream();
+//			TracerUtils.marshal(message, output);
+//			byte[] byteArray = output.toByteArray();
+//			broadcast(WebSocketUtils.newMessage(OpCode.TEXT, true, byteArray.length, IOUtils.wrap(byteArray, true)));
 		}
 		
-		public void broadcast(WebSocketMessage message) {
-			ServiceRuntime runtime = ServiceRuntime.getRuntime();
-			// we are currently not running a service, only check the original service id this was created for
-			if (runtime == null) {
-				for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + originalServiceId)) {
-					pipeline.getResponseQueue().add(message);
-				}
-			}
-			else {
-				// make sure we send the message to anyone listening to any of the services in the callstack
-				while (runtime != null) {
-					Service service = getService(runtime);
-					if (service instanceof DefinedService) {
-						for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId().split(":")[0])) {
-							pipeline.getResponseQueue().add(message);
-						}
-					}
-					runtime = runtime.getParent();
-				}
-			}
-		}
+//		public void broadcast(WebSocketMessage message) {
+//			ServiceRuntime runtime = ServiceRuntime.getRuntime();
+//			// we are currently not running a service, only check the original service id this was created for
+//			if (runtime == null) {
+//				for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + originalServiceId)) {
+//					pipeline.getResponseQueue().add(message);
+//				}
+//			}
+//			else {
+//				// make sure we send the message to anyone listening to any of the services in the callstack
+//				while (runtime != null) {
+//					Service service = getService(runtime);
+//					if (service instanceof DefinedService) {
+//						for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId().split(":")[0])) {
+//							pipeline.getResponseQueue().add(message);
+//						}
+//					}
+//					runtime = runtime.getParent();
+//				}
+//			}
+//		}
 		
 		public TraceMessage newMessage(TraceType type, Exception exception) {
 			TraceMessage newMessage = newMessage(type);
@@ -247,13 +387,32 @@ public class TracerListener implements ServerListener {
 			exception.printStackTrace(printer);
 			printer.flush();
 			newMessage.setException(writer.toString());
+			ServiceException serviceException = getServiceException(exception);
+			if (serviceException != null) {
+				newMessage.setCode(((ServiceException) exception).getCode());
+				newMessage.setReportType("exception-description");
+				newMessage.setReport(((ServiceException) exception).getDescription());
+				if (newMessage.getReport() == null) {
+					newMessage.setReport(exception.getMessage());
+				}
+			}
 			return newMessage;
 		}
 		
 		public TraceMessage newMessage(TraceType type) {
 			TraceMessage message = new TraceMessage();
+			message.setMessageIndex(messageCounter++);
 			message.setTraceId(id);
 			message.setType(type);
+			message.setCorrelationId(correlationId);
+			if (token != null) {
+				message.setAlias(token.getName());
+				message.setRealm(token.getRealm());
+				message.setAuthenticationId(token.getAuthenticationId());
+				message.setImpersonator(token.getImpersonator());
+				message.setImpersonatorId(token.getImpersonatorId());
+				message.setAuthenticator(token.getAuthenticator());
+			}
 			if (!serviceStack.isEmpty()) {
 				message.setServiceId(serviceStack.peek());
 			}
@@ -265,17 +424,26 @@ public class TracerListener implements ServerListener {
 		
 		@Override
 		public void report(Object object) {
+			report(object, "technical");
+		}
+
+		private void report(Object object, String audience) {
 			if (object != null) {
+				ComplexContent content = wrapAsComplex(object);
+				// disadvantage is that we don't get xsi:type, but advantage (important at this point) is that we can easily unmarshal it in the frontend
+				// before it was using JAXB anyway instead of xml binding, so we didn't have xsi type in the past either
+				// the reports are usually dedicated java objects and the descriptions structures et al
 				try {
-					JAXBContext context = JAXBContext.newInstance(object.getClass());
+					JSONBinding binding = new JSONBinding(content.getType(), charset);
 					ByteArrayOutputStream output = new ByteArrayOutputStream();
-					context.createMarshaller().marshal(object, output);
+					binding.marshal(output, content);
 					TraceMessage message = newMessage(TraceType.REPORT);
 					message.setReport(new String(output.toByteArray()));
-					message.setReportType(object.getClass().getName());
+					message.setReportType(content.getType() instanceof DefinedType ? ((DefinedType) content.getType()).getId() : "java.lang.Object");
+					message.setReportTarget(audience);
 					broadcast(message);
 				}
-				catch (JAXBException e) {
+				catch (IOException e) {
 					logger.error("Could not report object", e);
 				}
 			}
@@ -301,7 +469,8 @@ public class TracerListener implements ServerListener {
 		private String marshal(ComplexType type, ComplexContent content) {
 			if (content != null) {
 				content = new StreamHiderContent(content);
-				XMLBinding binding = new XMLBinding(type, Charset.forName("UTF-8"));
+//				XMLBinding binding = new XMLBinding(type, charset);
+				JSONBinding binding = new JSONBinding(type, charset);
 				ByteArrayOutputStream output = new ByteArrayOutputStream();
 				try {
 					binding.marshal(output, content);
@@ -338,6 +507,8 @@ public class TracerListener implements ServerListener {
 				serviceStack.pop();
 				message.setStarted(timestamps.pop());
 				message.setStopped(new Date());
+				// a service message never has a comment at this point, so we use it to summarize the exception
+				message.setComment(exception.getMessage());
 				broadcast(message);
 			}
 		}
@@ -349,6 +520,19 @@ public class TracerListener implements ServerListener {
 				stepStack.push(((Step) step).getId());
 				timestamps.push(timestamp);
 				TraceMessage message = newMessage(TraceType.STEP);
+				message.setStepType(step.getClass().getName());
+				message.setCondition(((Step) step).getLabel());
+				message.setFeature(((Step) step).getFeatures());
+				message.setComment(((Step) step).getComment());
+				if (step instanceof Link) {
+					message.setFrom(((Link) step).getFrom());
+					message.setTo(((Link) step).getTo());
+					message.setFixed(((Link) step).isFixedValue());
+					message.setMasked(((Link) step).isMask());
+				}
+				else if (step instanceof Throw) {
+					message.setCode(((Throw) step).getCode());
+				}
 				message.setStarted(timestamp);
 				broadcast(message);
 			}
@@ -360,6 +544,8 @@ public class TracerListener implements ServerListener {
 				TraceMessage message = newMessage(TraceType.STEP);
 				stepStack.pop();
 				message.setStarted(timestamps.pop());
+				message.setStepType(step.getClass().getName());
+				message.setComment(((Step) step).getComment());
 				message.setStopped(new Date());
 				broadcast(message);
 			}
@@ -371,120 +557,76 @@ public class TracerListener implements ServerListener {
 				TraceMessage message = newMessage(TraceType.STEP, exception);
 				stepStack.pop();
 				message.setStarted(timestamps.pop());
+				message.setStepType(step.getClass().getName());
+				message.setComment(((Step) step).getComment());
 				message.setStopped(new Date());
 				broadcast(message);
 			}			
 		}
 		
-	}
-	
-	@XmlRootElement(name = "trace")
-	public static class TraceMessage {
-		
-		public enum TraceType {
-			REPORT,
-			SERVICE,
-			STEP,
-			HEARTBEAT
-		}
-		
-		private String traceId, serviceId, stepId, exception, report, reportType;
-		private Date started, stopped;
-		private TraceType type;
-		private String input, output;
-
-		public String getTraceId() {
-			return traceId;
-		}
-		public void setTraceId(String traceId) {
-			this.traceId = traceId;
+		private ServiceException getServiceException(Exception exception) {
+			ServiceException last = null;
+			while (exception != null && exception.getCause() instanceof Exception) {
+				if (exception instanceof ServiceException) {
+					last = (ServiceException) exception;
+				}
+				exception = (Exception) exception.getCause();
+			}
+			return last;
 		}
 
-		public String getServiceId() {
-			return serviceId;
-		}
-		public void setServiceId(String serviceId) {
-			this.serviceId = serviceId;
+		public List<TraceProfile> getActiveProfiles() {
+			return activeProfiles;
 		}
 
-		public String getStepId() {
-			return stepId;
-		}
-		public void setStepId(String stepId) {
-			this.stepId = stepId;
+		public void setActiveProfiles(List<TraceProfile> activeProfiles) {
+			this.activeProfiles = activeProfiles;
 		}
 
-		public String getException() {
-			return exception;
+		@Override
+		public void describe(Object object) {
+			report(object, "business");
 		}
-		public void setException(String exception) {
-			this.exception = exception;
-		}
-		
-		public String getReport() {
-			return report;
-		}
-		public void setReport(String report) {
-			this.report = report;
-		}
-		
-		public String getReportType() {
-			return reportType;
-		}
-		public void setReportType(String reportType) {
-			this.reportType = reportType;
-		}
-		
-		public TraceType getType() {
-			return type;
-		}
-		public void setType(TraceType type) {
-			this.type = type;
-		}
-		
-		public Date getStarted() {
-			return started;
-		}
-		public void setStarted(Date started) {
-			this.started = started;
-		}
-		
-		public Date getStopped() {
-			return stopped;
-		}
-		public void setStopped(Date stopped) {
-			this.stopped = stopped;
-		}
-		
-		public String getInput() {
-			return input;
-		}
-		public void setInput(String input) {
-			this.input = input;
-		}
-		public String getOutput() {
-			return output;
-		}
-		public void setOutput(String output) {
-			this.output = output;
-		}
-		
-		public void serialize(OutputStream output) {
-			try {
-				context.createMarshaller().marshal(this, output);
+
+		@SuppressWarnings("unchecked")
+		private ComplexContent wrapAsComplex(Object object) {
+			if (object != null) {
+				DefinedSimpleType<? extends Object> simpleType = SimpleTypeWrapperFactory.getInstance().getWrapper().wrap(object.getClass());
+				if (simpleType != null) {
+					TraceReportString reportString = new TraceReportString();
+					reportString.setReport(object instanceof String ? (String) object : ConverterFactory.getInstance().getConverter().convert(object, String.class));
+					object = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(reportString);
+				}
+				else if (!(object instanceof ComplexContent)) {
+					Object wrapped = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(object);
+					// we can't wrap it, so it's not a valid complex content
+					if (wrapped == null) {
+						TraceReportString reportString = new TraceReportString();
+						reportString.setReport(object.toString());
+						object = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(reportString);
+					}
+					else {
+						object = wrapped;
+					}
+				}
 			}
-			catch (JAXBException e) {
-				throw new RuntimeException(e);
-			}
+			return (ComplexContent) object;
 		}
-		
-		public static TraceMessage unmarshal(InputStream input) {
-			try {
-				return (TraceMessage) context.createUnmarshaller().unmarshal(input);
-			}
-			catch (JAXBException e) {
-				throw new RuntimeException(e);
-			}
+
+		public String getCorrelationId() {
+			return correlationId;
+		}
+
+		public void setCorrelationId(String correlationId) {
+			this.correlationId = correlationId;
+		}
+
+		public Token getToken() {
+			return token;
+		}
+
+		public void setToken(Token token) {
+			this.token = token;
 		}
 	}
 }

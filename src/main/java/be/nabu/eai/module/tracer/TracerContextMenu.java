@@ -7,6 +7,7 @@ import java.io.StringReader;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.nio.charset.Charset;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -66,8 +67,6 @@ import be.nabu.eai.developer.managers.util.SimplePropertyUpdater;
 import be.nabu.eai.developer.util.EAIDeveloperUtils;
 import be.nabu.eai.module.services.vm.StepFactory;
 import be.nabu.eai.module.services.vm.VMServiceGUIManager;
-import be.nabu.eai.module.tracer.TracerListener.TraceMessage;
-import be.nabu.eai.module.tracer.TracerListener.TraceMessage.TraceType;
 import be.nabu.eai.repository.RepositoryThreadFactory;
 import be.nabu.eai.repository.api.ContainerArtifact;
 import be.nabu.eai.repository.api.Entry;
@@ -104,14 +103,20 @@ import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.vm.api.Step;
 import be.nabu.libs.services.vm.api.StepGroup;
 import be.nabu.libs.services.vm.api.VMService;
+import be.nabu.libs.types.ComplexContentWrapperFactory;
+import be.nabu.libs.types.DefinedTypeResolverFactory;
 import be.nabu.libs.types.SimpleTypeWrapperFactory;
 import be.nabu.libs.types.api.ComplexContent;
+import be.nabu.libs.types.api.ComplexType;
+import be.nabu.libs.types.api.DefinedType;
 import be.nabu.libs.types.base.SimpleElementImpl;
 import be.nabu.libs.types.base.ValueImpl;
 import be.nabu.libs.types.binding.api.Window;
+import be.nabu.libs.types.binding.json.JSONBinding;
 import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.libs.types.java.BeanInstance;
 import be.nabu.libs.types.java.BeanResolver;
+import be.nabu.libs.types.map.MapTypeGenerator;
 import be.nabu.libs.types.structure.Structure;
 import be.nabu.libs.types.structure.StructureInstance;
 import be.nabu.utils.io.IOUtils;
@@ -145,7 +150,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 					public void run() {
 						try {
 							String serviceId = event.getPath().substring("/trace/".length());
-							TraceMessage message = TraceMessage.unmarshal(event.getData());
+							TraceMessage message = TracerUtils.unmarshal(event.getData());
 							// we ignore heartbeats, they are simply to keep the websocket connection alive!
 							if (TraceType.HEARTBEAT.equals(message.getType())) {
 								return;
@@ -218,15 +223,15 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								if (current == null) {
 									current = (TraceTreeItem) requestTree.rootProperty().get();
 								}
-								// if we have to add a report, add it to the current item
-								if (message.getReport() != null) {
-									current.getChildren().add(new TraceTreeItem(current, message));
-								}
 								// it is the "end" message of whatever current step is ongoing
-								else if (message.getStopped() != null) {
+								if (message.getStopped() != null) {
 									// inherit the input from the "start" if applicable
 									message.setInput(current.itemProperty().get().getInput());
 									current.itemProperty().set(message);
+								}
+								// if we have to add a report, add it to the current item
+								else if (message.getReport() != null) {
+									current.getChildren().add(new TraceTreeItem(current, message));
 								}
 								// else it's a new message, add it
 								else {
@@ -483,7 +488,15 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				public void refresh() {
 					refresh(item, item.itemProperty().get());
 				}
-				
+				private ComplexContent dynamicParse(String message) throws IOException, ParseException {
+					ComplexContent content;
+					JSONBinding binding = new JSONBinding(new MapTypeGenerator(false), Charset.forName("UTF-8"));
+					binding.setAllowDynamicElements(true);
+					binding.setAddDynamicElementDefinitions(true);
+					binding.setIgnoreRootIfArrayWrapper(true);
+					content = binding.unmarshal(new ByteArrayInputStream(message.getBytes(Charset.forName("UTF-8"))), new Window[0]);
+					return content;
+				}
 				private void refresh(TreeItem<TraceMessage> item, TraceMessage message) {
 					box.getChildren().clear();
 					// it is an action that has a start & stop timestamp
@@ -511,28 +524,52 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						showReport.getStyleClass().add("small-button");
 						HBox.setMargin(showReport, new Insets(0, 0, 0, 5));
 						showReport.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
-							@SuppressWarnings({ "rawtypes", "unchecked" })
+							@SuppressWarnings({ "unchecked" })
 							@Override
 							public void handle(ActionEvent event) {
 								try {
-									Set<Property<?>> properties = getPropertiesFor(message.getReportType());
-									if (properties != null && !properties.isEmpty()) {
-										JAXBContext context = JAXBContext.newInstance(MainController.getInstance().getRepository().getClassLoader().loadClass(message.getReportType()));
-										Object unmarshal = context.createUnmarshaller().unmarshal(new StringReader(message.getReport()));
-										BeanInstance instance = new BeanInstance(unmarshal);
-										MainController.getInstance().showContent(instance);
+									ComplexContent content;
+									// it was some undefined type, we do a parse without specific type
+									if (message.getReportType() == null || "java.lang.Object".equals(message.getReportType())) {
+										content = dynamicParse(message.getReport());
+									}
+									else {
+										DefinedType resolvedType = DefinedTypeResolverFactory.getInstance().getResolver().resolve(message.getReportType());
+										// it might be expressed in a type you don't know
+										if (resolvedType == null) {
+											TraceReportString reportString = new TraceReportString();
+											reportString.setReport(message.getReport());
+											content = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(reportString);
+										}
+										else {
+											JSONBinding binding = new JSONBinding((ComplexType) resolvedType, Charset.forName("UTF-8"));
+											content = binding.unmarshal(new ByteArrayInputStream(message.getReport().getBytes(Charset.forName("UTF-8"))), new Window[0]);
+										}
+									}
+									MainController.getInstance().showContent(content);
+									
+//									Set<Property<?>> properties = getPropertiesFor(message.getReportType());
+//									if (properties != null && !properties.isEmpty()) {
+										
+//										JAXBContext context = JAXBContext.newInstance(MainController.getInstance().getRepository().getClassLoader().loadClass(message.getReportType()));
+//										Object unmarshal = context.createUnmarshaller().unmarshal(new StringReader(message.getReport()));
+//										BeanInstance instance = new BeanInstance(unmarshal);
+//										MainController.getInstance().showContent(instance);
+										
 //										List<Value<?>> values = new ArrayList<Value<?>>();
 //										for (Property<?> property : properties) {
 //											values.add(new ValueImpl(property, instance.get(property.getName())));
 //										}
 //										EAIDeveloperUtils.buildPopup(MainController.getInstance(), new SimplePropertyUpdater(true, properties, values.toArray(new Value[values.size()])), "Report", null);
-									}
+//									}
 								}
 								catch (Exception e) {
 									e.printStackTrace();
 									// we tried...
 								}
 							}
+
+							
 						});
 						box.getChildren().add(showReport);
 					}
@@ -560,24 +597,31 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						showInput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 							@Override
 							public void handle(ActionEvent arg0) {
+								boolean displayed = false;
+								// we first want to try a defined parsed, this gives us a lot more information about data types, formatting etc
 								try {
 									DefinedService service = ((TraceTreeItem) cell.get().getItem()).getService();
 									if (service != null) {
-										XMLBinding binding = new XMLBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
-										binding.setIgnoreUndefined(true);
+//										XMLBinding binding = new XMLBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
+//										binding.setIgnoreUndefined(true);
+										JSONBinding binding = new JSONBinding(service.getServiceInterface().getInputDefinition(), Charset.forName("UTF-8"));
+										binding.setIgnoreUnknownElements(true);
 										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getInput().getBytes("UTF-8")), new Window[0]);
 										MainController.getInstance().showContent(unmarshal);
-									}
-									else {
-										TextArea area = new TextArea();
-										area.setEditable(false);
-										area.setText(message.getInput());
-										MainController.getInstance().getAncPipeline().getChildren().clear();
-										MainController.getInstance().getAncPipeline().getChildren().add(area);
+										displayed = true;
 									}
 								}
 								catch(Exception e) {
-									e.printStackTrace();
+									// ignore
+								}
+								if (!displayed) {
+									try {
+										MainController.getInstance().showContent(dynamicParse(message.getInput()));
+									}
+									catch (Exception f) {
+										MainController.getInstance().showText(message.getOutput());
+										f.printStackTrace();
+									}
 								}
 							}
 						});
@@ -590,26 +634,28 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						showOutput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 							@Override
 							public void handle(ActionEvent arg0) {
+								boolean displayed = false;
 								try {
 									DefinedService service = ((TraceTreeItem) cell.get().getItem()).getService();
-									boolean displayed = false;
 									if (service != null) {
-										XMLBinding binding = new XMLBinding(service.getServiceInterface().getOutputDefinition(), Charset.forName("UTF-8"));
-										try {
-											ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getOutput().getBytes("UTF-8")), new Window[0]);
-											MainController.getInstance().showContent(unmarshal);
-											displayed = true;
-										}
-										catch (Exception e) {
-											// ignore
-										}
-									}
-									if (!displayed) {
-										MainController.getInstance().showText(message.getOutput());
+//										XMLBinding binding = new XMLBinding(service.getServiceInterface().getOutputDefinition(), Charset.forName("UTF-8"));
+										JSONBinding binding = new JSONBinding(service.getServiceInterface().getOutputDefinition(), Charset.forName("UTF-8"));
+										ComplexContent unmarshal = binding.unmarshal(new ByteArrayInputStream(message.getOutput().getBytes("UTF-8")), new Window[0]);
+										MainController.getInstance().showContent(unmarshal);
+										displayed = true;
 									}
 								}
-								catch(Exception e) {
-									e.printStackTrace();
+								catch (Exception e) {
+									// ignore
+								}
+								if (!displayed) {
+									try {
+										MainController.getInstance().showContent(dynamicParse(message.getOutput()));
+									}
+									catch (Exception f) {
+										MainController.getInstance().showText(message.getOutput());
+										f.printStackTrace();
+									}
 								}
 							}
 						});
