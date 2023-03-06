@@ -389,11 +389,11 @@ public class TracerListener implements ServerListener {
 			newMessage.setException(writer.toString());
 			ServiceException serviceException = getServiceException(exception);
 			if (serviceException != null) {
-				newMessage.setCode(((ServiceException) exception).getCode());
+				newMessage.setCode(serviceException.getCode());
 				newMessage.setReportType("exception-description");
-				newMessage.setReport(((ServiceException) exception).getDescription());
+				newMessage.setReport(serviceException.getDescription());
 				if (newMessage.getReport() == null) {
-					newMessage.setReport(exception.getMessage());
+					newMessage.setReport(serviceException.getMessage());
 				}
 			}
 			return newMessage;
