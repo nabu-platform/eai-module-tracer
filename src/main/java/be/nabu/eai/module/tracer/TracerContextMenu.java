@@ -679,6 +679,18 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						});
 						box.getChildren().add(showError);
 					}
+					if (message.getServiceId() != null && message.getType() == TraceType.SERVICE) {
+						Button showService = new Button();
+						showService.setGraphic(MainController.loadFixedSizeGraphic("right-chevron.png", 12));
+						HBox.setMargin(showService, new Insets(0, 0, 0, 5));
+						showService.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+							@Override
+							public void handle(ActionEvent arg0) {
+								MainController.getInstance().open(message.getServiceId());
+							}
+						});
+						box.getChildren().add(showService);
+					}
 				}
 			};
 		}
