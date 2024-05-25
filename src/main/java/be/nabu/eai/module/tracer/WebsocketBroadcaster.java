@@ -20,10 +20,12 @@ public class WebsocketBroadcaster implements TracingBroadcaster {
 
 	private HTTPServer httpServer;
 	private String originalServiceId;
+	private boolean summaryOnly;
 	
-	public WebsocketBroadcaster(HTTPServer httpServer, String originalServiceId) {
+	public WebsocketBroadcaster(HTTPServer httpServer, String originalServiceId, boolean summaryOnly) {
 		this.httpServer = httpServer;
 		this.originalServiceId = originalServiceId;
+		this.summaryOnly = summaryOnly;
 	}
 
 	@Override
@@ -41,7 +43,7 @@ public class WebsocketBroadcaster implements TracingBroadcaster {
 		ServiceRuntime runtime = ServiceRuntime.getRuntime();
 		// we are currently not running a service, only check the original service id this was created for
 		if (runtime == null) {
-			for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + originalServiceId)) {
+			for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + originalServiceId + (summaryOnly ? "/summary" : ""))) {
 				pipeline.getResponseQueue().add(message);
 			}
 		}
@@ -50,7 +52,7 @@ public class WebsocketBroadcaster implements TracingBroadcaster {
 			while (runtime != null) {
 				Service service = TracerListener.getService(runtime);
 				if (service instanceof DefinedService) {
-					for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId().split(":")[0])) {
+					for (StandardizedMessagePipeline<WebSocketRequest, WebSocketMessage> pipeline : WebSocketUtils.getWebsocketPipelines((NIOServer) httpServer, "/trace/" + ((DefinedService) service).getId().split(":")[0] + (summaryOnly ? "/summary" : ""))) {
 						pipeline.getResponseQueue().add(message);
 					}
 				}

@@ -6,6 +6,9 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -131,15 +134,24 @@ public class TracerListener implements ServerListener {
 				WebSocketRequestParserFactory parserFactory = WebSocketUtils.getParserFactory(event.getPipeline());
 				if (parserFactory != null) {
 					if (parserFactory.getPath().startsWith("/trace/")) {
+						boolean summaryOnly = false;
 						String service = parserFactory.getPath().substring("/trace/".length());
+						if (service.contains("/")) {
+							String[] split = service.split("/");
+							service = split[0];
+							if (split[1].equals("summary")) {
+								summaryOnly = true;
+							}
+						}
 						if (!service.isEmpty()) {
 							// we have a new websocket connection to the path, add the service if not in the list yet
 							if (ConnectionEvent.ConnectionState.UPGRADED.equals(event.getState())) {
 								if (!websocketSubscriptions.containsKey(service)) {
 									TraceProfile profile = new TraceProfile();
-									profile.setBroadcaster(new WebsocketBroadcaster(httpServer, service));
+									profile.setBroadcaster(new WebsocketBroadcaster(httpServer, service, summaryOnly));
 									profile.setRecursive(true);
 									profile.setServiceId(service);
+									profile.setSummaryOnly(summaryOnly);
 									websocketSubscriptions.put(service, registerProfile(profile));
 									logger.info("Added websocket tracer for: " + service);
 								}
@@ -310,8 +322,59 @@ public class TracerListener implements ServerListener {
 		return service;
 	}
 	
+	public static class TraceSummary {
+		private String serviceId;
+		private long amount, exceptions, total, maximum, minimum = Long.MAX_VALUE;
+		private double average;
+		public String getServiceId() {
+			return serviceId;
+		}
+		public void setServiceId(String serviceId) {
+			this.serviceId = serviceId;
+		}
+		public long getAmount() {
+			return amount;
+		}
+		public void setAmount(long amount) {
+			this.amount = amount;
+		}
+		public long getExceptions() {
+			return exceptions;
+		}
+		public void setExceptions(long exceptions) {
+			this.exceptions = exceptions;
+		}
+		public double getAverage() {
+			return average;
+		}
+		public void setAverage(double average) {
+			this.average = average;
+		}
+		public long getTotal() {
+			return total;
+		}
+		public void setTotal(long total) {
+			this.total = total;
+		}
+		public long getMaximum() {
+			return maximum;
+		}
+		public void setMaximum(long maximum) {
+			this.maximum = maximum;
+		}
+		public long getMinimum() {
+			return minimum;
+		}
+		public void setMinimum(long minimum) {
+			this.minimum = minimum;
+		}
+		@Override
+		public String toString() {
+			return serviceId + " (#" + amount + " * [" + minimum + ", " + maximum + "] = " + total + ")";
+		}
+	}
+	
 	public class TracingTracker implements ServiceRuntimeTracker {
-
 		// for sequential listing of messages without having to rely on dates
 		private long messageCounter;
 		private String id = UUID.randomUUID().toString().replace("-", "");
@@ -322,6 +385,8 @@ public class TracerListener implements ServerListener {
 		private Charset charset = Charset.forName("UTF-8");
 		private String correlationId;
 		private Token token;
+		private Map<String, TraceSummary> summaries = new HashMap<String, TraceSummary>();
+		private String rootService;
 		
 		// for this particular instance of the tracker, we want to know which trace profiles have already received a hello message
 		private List<TraceProfile> alreadyHello = new ArrayList<TraceProfile>();
@@ -329,6 +394,13 @@ public class TracerListener implements ServerListener {
 		public void broadcast(TraceMessage message) {
 			if (activeProfiles != null && !activeProfiles.isEmpty()) {
 				for (TraceProfile profile : activeProfiles) {
+					// todo: add decent support for type summary?
+					if (message.getType() == TraceType.SUMMARY) {
+						message.setType(TraceType.REPORT);
+					}
+					else if (profile.isSummaryOnly()) {
+						continue;
+					}
 					// this should not be multithreaded because a tracer is limited to a single thread
 					if (profile.isHello() && !alreadyHello.contains(profile)) {
 						TraceMessage hello = new TraceMessage();
@@ -356,6 +428,23 @@ public class TracerListener implements ServerListener {
 //			TracerUtils.marshal(message, output);
 //			byte[] byteArray = output.toByteArray();
 //			broadcast(WebSocketUtils.newMessage(OpCode.TEXT, true, byteArray.length, IOUtils.wrap(byteArray, true)));
+		}
+		
+		public void broadcastSummaries() {
+			List<TraceSummary> values = new ArrayList<TraceSummary>(summaries.values());
+			// we want the "longest" first
+			Collections.sort(values, new Comparator<TraceSummary>() {
+				@Override
+				public int compare(TraceSummary o1, TraceSummary o2) {
+					return (int) (o2.getTotal() - o1.getTotal());
+				}
+			});
+			for (TraceSummary summary : values) {
+				// we don't care too much about the fast stuff
+				if (summary.getTotal() > 50) {
+					report(summary, "technical", TraceType.SUMMARY);
+				}
+			}
 		}
 		
 //		public void broadcast(WebSocketMessage message) {
@@ -428,6 +517,10 @@ public class TracerListener implements ServerListener {
 		}
 
 		private void report(Object object, String audience) {
+			report(object, audience, TraceType.REPORT);
+		}
+		
+		private void report(Object object, String audience, TraceType traceType) {
 			if (object != null) {
 				ComplexContent content = wrapAsComplex(object);
 				// disadvantage is that we don't get xsi:type, but advantage (important at this point) is that we can easily unmarshal it in the frontend
@@ -437,10 +530,11 @@ public class TracerListener implements ServerListener {
 					JSONBinding binding = new JSONBinding(content.getType(), charset);
 					ByteArrayOutputStream output = new ByteArrayOutputStream();
 					binding.marshal(output, content);
-					TraceMessage message = newMessage(TraceType.REPORT);
+					TraceMessage message = newMessage(traceType);
 					message.setReport(new String(output.toByteArray()));
 					message.setReportType(content.getType() instanceof DefinedType ? ((DefinedType) content.getType()).getId() : "java.lang.Object");
 					message.setReportTarget(audience);
+					message.setServiceId(rootService);
 					broadcast(message);
 				}
 				catch (IOException e) {
@@ -455,6 +549,9 @@ public class TracerListener implements ServerListener {
 			if (service instanceof DefinedService) {
 				Date timestamp = new Date();
 				timestamps.push(timestamp);
+				if (serviceStack.isEmpty()) {
+					rootService = ((DefinedService) service).getId();
+				}
 				serviceStack.push(((DefinedService) service).getId());
 				TraceMessage message = newMessage(TraceType.SERVICE);
 				message.setStarted(timestamp);
@@ -483,6 +580,29 @@ public class TracerListener implements ServerListener {
 			return null;
 		}
 
+		private void addSummary(String serviceId, long runtime, boolean exception) {
+			TraceSummary summary = summaries.get(serviceId);
+			// TODO
+			if (!summaries.containsKey(serviceId)) {
+				summary = new TraceSummary();
+				summary.setServiceId(serviceId);
+				summaries.put(serviceId, summary);
+			}
+			double newAverage = ((summary.getAverage() * summary.getAmount()) + runtime) / (summary.getAmount() + 1);
+			summary.setTotal(summary.getTotal() + runtime);
+			summary.setAverage(newAverage);
+			summary.setAmount(summary.getAmount() + 1);
+			if (runtime < summary.getMinimum()) {
+				summary.setMinimum(runtime);
+			}
+			if (runtime > summary.getMaximum()) {
+				summary.setMaximum(runtime);
+			}
+			if (exception) {
+				summary.setExceptions(summary.getExceptions() + 1);
+			}
+		}
+		
 		@Override
 		public void stop(Service service) {
 			service = resolveService(service);
@@ -496,6 +616,10 @@ public class TracerListener implements ServerListener {
 					message.setOutput(marshal(service.getServiceInterface().getOutputDefinition(), output));
 				}
 				broadcast(message);
+				addSummary(((DefinedService) service).getId(), message.getStopped().getTime() - message.getStarted().getTime(), false);
+				if (serviceStack.isEmpty()) {
+					broadcastSummaries();
+				}
 			}
 		}
 
@@ -510,6 +634,10 @@ public class TracerListener implements ServerListener {
 				// a service message never has a comment at this point, so we use it to summarize the exception
 				message.setComment(exception.getMessage());
 				broadcast(message);
+				addSummary(((DefinedService) service).getId(), message.getStopped().getTime() - message.getStarted().getTime(), false);
+				if (serviceStack.isEmpty()) {
+					broadcastSummaries();
+				}
 			}
 		}
 

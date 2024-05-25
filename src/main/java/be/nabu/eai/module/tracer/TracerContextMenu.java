@@ -1,9 +1,7 @@
 package be.nabu.eai.module.tracer;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.StringReader;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.nio.charset.Charset;
@@ -37,6 +35,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
@@ -127,6 +126,15 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 	private static EventDispatcher dispatcher = new EventDispatcherImpl();
 	private static Map<String, WebSocketClient> websocketClients = new HashMap<String, WebSocketClient>();
 	
+	private static String getServiceIdFromPath(String path) {
+		String serviceId = path.substring("/trace/".length());
+		if (serviceId.contains("/")) {
+			String[] split = serviceId.split("/");
+			serviceId = split[0];
+		}
+		return serviceId;
+	}
+	
 	static {
 		dispatcher.subscribe(ConnectionEvent.class, new be.nabu.libs.events.api.EventHandler<ConnectionEvent, Void>() {
 			@Override
@@ -134,7 +142,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				if (ConnectionState.CLOSED.equals(event.getState())) {
 					WebSocketRequestParserFactory parserFactory = WebSocketUtils.getParserFactory(event.getPipeline());
 					if (parserFactory != null) {
-						String serviceId = parserFactory.getPath().substring("/trace/".length());
+						String serviceId = getServiceIdFromPath(parserFactory.getPath());
 						stopTrace(serviceId);
 					}
 				}
@@ -149,7 +157,8 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 					@SuppressWarnings("unchecked")
 					public void run() {
 						try {
-							String serviceId = event.getPath().substring("/trace/".length());
+							String serviceId = getServiceIdFromPath(event.getPath());
+							
 							TraceMessage message = TracerUtils.unmarshal(event.getData());
 							// we ignore heartbeats, they are simply to keep the websocket connection alive!
 							if (TraceType.HEARTBEAT.equals(message.getType())) {
@@ -284,6 +293,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 	public static class Tracer {
 		private String service;
 		private Date since;
+		private boolean summaryOnly;
 		public String getService() {
 			return service;
 		}
@@ -295,6 +305,12 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 		}
 		public void setSince(Date since) {
 			this.since = since;
+		}
+		public boolean isSummaryOnly() {
+			return summaryOnly;
+		}
+		public void setSummaryOnly(boolean summaryOnly) {
+			this.summaryOnly = summaryOnly;
 		}
 	}
 	
@@ -779,6 +795,8 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 				return item;
 			}
 			else {
+				Menu menu = new Menu();
+				menu.setText("Trace");
 				MenuItem item = new MenuItem("Start Trace");
 				item.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 					@Override
@@ -820,7 +838,51 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 						}
 					}
 				});
-				return item;
+				menu.getItems().add(item);
+				item = new MenuItem("Start Profile");
+				item.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+					@Override
+					public void handle(ActionEvent event) {
+						synchronized(clients) {
+							if (!clients.containsKey(entry.getId())) {
+								ServerConnection server = MainController.getInstance().getServer();
+								MemoryMessageDataProvider dataProvider = new MemoryMessageDataProvider();
+								NIOHTTPClientImpl client = new NIOHTTPClientImpl(server.getContext(), 3, 3, 5, dispatcher, dataProvider, new CookieManager(new CustomCookieStore(), CookiePolicy.ACCEPT_ALL), new RepositoryThreadFactory(entry.getRepository()));
+								WebSocketUtils.allowWebsockets(client, dataProvider);
+								try {
+									WebSocketUtils.upgrade(client, server.getContext(), server.getHost(), server.getPort(), "/trace/" + entry.getId() + "/summary", (Token) server.getPrincipal(), dataProvider, dispatcher, new ArrayList<String>(), WebAuthorizationType.BASIC);
+									clients.put(entry.getId(), client);
+									Tracer tracer = new Tracer();
+									tracer.setService(entry.getId());
+									tracer.setSince(new Date());
+									tracer.setSummaryOnly(true);
+									Platform.runLater(new Runnable() {
+										@Override
+										public void run() {
+											if (lstTracer != null) {
+												synchronized(lstTracer) {
+													lstTracer.getItems().add(tracer);
+												}
+												updateTabCount();
+											}
+										}
+									});
+								}
+								catch (Exception e) {
+									logger.error("Can not start trace mode for: " + entry.getId(), e);
+									try {
+										client.close();
+									}
+									catch (Exception f) {
+										// nothing to do
+									}
+								}
+							}
+						}
+					}
+				});
+				menu.getItems().add(item);
+				return menu;
 			}
 		}
 		return null;

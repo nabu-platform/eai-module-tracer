@@ -6,5 +6,6 @@ public enum TraceType {
 	STEP,
 	HEARTBEAT,
 	// when a new trace is started
-	START
+	START,
+	SUMMARY
 }

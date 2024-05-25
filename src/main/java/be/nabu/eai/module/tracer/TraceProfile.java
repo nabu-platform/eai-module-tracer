@@ -14,6 +14,8 @@ public class TraceProfile {
 	private boolean recursive;
 	// do we want a hello when a new trace is started? this allows for example a database listener to create a new master record that it can use to link all subsequent records on
 	private boolean hello;
+	// some profiles only want the summary, not the full data
+	private boolean summaryOnly;
 	private TracingBroadcaster broadcaster;
 	
 	public String getServiceId() {
@@ -59,4 +61,12 @@ public class TraceProfile {
 	public void setHello(boolean hello) {
 		this.hello = hello;
 	}
+	
+	public boolean isSummaryOnly() {
+		return summaryOnly;
+	}
+	public void setSummaryOnly(boolean summaryOnly) {
+		this.summaryOnly = summaryOnly;
+	}
+	
 }
