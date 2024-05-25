@@ -441,8 +441,8 @@ public class TracerListener implements ServerListener {
 			});
 			for (TraceSummary summary : values) {
 				// we don't care too much about the fast stuff
-				if (summary.getTotal() > 50) {
-					report(summary, "technical", TraceType.SUMMARY);
+				if (summary.getTotal() > 20 || summary.getServiceId().equals(rootService)) {
+					report(summary, "technical", TraceType.SUMMARY, summary.toString());
 				}
 			}
 		}
@@ -517,10 +517,10 @@ public class TracerListener implements ServerListener {
 		}
 
 		private void report(Object object, String audience) {
-			report(object, audience, TraceType.REPORT);
+			report(object, audience, TraceType.REPORT, null);
 		}
 		
-		private void report(Object object, String audience, TraceType traceType) {
+		private void report(Object object, String audience, TraceType traceType, String comment) {
 			if (object != null) {
 				ComplexContent content = wrapAsComplex(object);
 				// disadvantage is that we don't get xsi:type, but advantage (important at this point) is that we can easily unmarshal it in the frontend
@@ -532,6 +532,7 @@ public class TracerListener implements ServerListener {
 					binding.marshal(output, content);
 					TraceMessage message = newMessage(traceType);
 					message.setReport(new String(output.toByteArray()));
+					message.setComment(comment);
 					message.setReportType(content.getType() instanceof DefinedType ? ((DefinedType) content.getType()).getId() : "java.lang.Object");
 					message.setReportTarget(audience);
 					message.setServiceId(rootService);

@@ -1069,7 +1069,7 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 							graphic.getChildren().add(MainController.loadGraphic(VMServiceGUIManager.getIcon(step.getClass())));
 						}
 						else if (TraceType.REPORT.equals(message.getType())) {
-							name = "Report: " + message.getReportType().replaceAll("^.*\\.([^.]+)$", "$1");
+							name = message.getComment() == null ? "Report: " + message.getReportType().replaceAll("^.*\\.([^.]+)$", "$1") : message.getComment();
 							graphic.getChildren().add(MainController.loadGraphic("types/string.gif"));
 						}
 						else {
