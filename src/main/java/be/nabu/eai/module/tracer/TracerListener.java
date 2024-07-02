@@ -566,6 +566,7 @@ public class TracerListener implements ServerListener {
 
 		private String marshal(ComplexType type, ComplexContent content) {
 			if (content != null) {
+				// TODO: the stream hider does not seem to work recursively so only streams at the root level of the complex content are hidden, others might be read in full
 				content = new StreamHiderContent(content);
 //				XMLBinding binding = new XMLBinding(type, charset);
 				JSONBinding binding = new JSONBinding(type, charset);

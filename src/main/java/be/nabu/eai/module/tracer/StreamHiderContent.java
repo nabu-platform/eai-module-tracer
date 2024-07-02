@@ -2,6 +2,7 @@ package be.nabu.eai.module.tracer;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.util.Iterator;
 
 import be.nabu.libs.types.MarshalRuleFactory;
 import be.nabu.libs.types.api.ComplexContent;
@@ -30,7 +31,34 @@ public class StreamHiderContent implements ComplexContent {
 	@Override
 	public Object get(String path) {
 		Object object = content.get(path);
-		if (object instanceof InputStream) {
+		return process(object);
+	}
+
+	private Object process(Object object) {
+		if (object instanceof ComplexContent) {
+			return new StreamHiderContent((ComplexContent) object);
+		}
+		else if (object instanceof Iterable) {
+			// @2024-05-28: this could SHOULD be ok but has not been tested yet
+			return new Iterable<Object>() {
+				@Override
+				public Iterator<Object> iterator() {
+					Iterator<?> iterator = ((Iterable<?>) object).iterator();
+					return new Iterator<Object>() {
+						@Override
+						public boolean hasNext() {
+							return iterator.hasNext();
+						}
+						@Override
+						public Object next() {
+							Object next = iterator.next();
+							return process(next);
+						}
+					};
+				}
+			};
+		}
+		else if (object instanceof InputStream) {
 			return new ByteArrayInputStream(("Instance: " + object.getClass().getName()).getBytes());
 		}
 		else if (object instanceof ResultSetWithType) {
