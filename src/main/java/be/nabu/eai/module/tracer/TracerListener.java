@@ -528,6 +528,9 @@ public class TracerListener implements ServerListener {
 				// the reports are usually dedicated java objects and the descriptions structures et al
 				try {
 					JSONBinding binding = new JSONBinding(content.getType(), charset);
+					// when marshalling binary data, this may be necessary to avoid issues (e.g. for binary file uploads, the raw http requests)
+					// IMPORTANT: currently we do NOT allow nil characters on unmarshalling meaning they will "disappear" when viewed in developer. this is currently acceptable but may need to be further revised in the future
+					binding.setAllowNilCharacter(true);
 					ByteArrayOutputStream output = new ByteArrayOutputStream();
 					binding.marshal(output, content);
 					TraceMessage message = newMessage(traceType);
