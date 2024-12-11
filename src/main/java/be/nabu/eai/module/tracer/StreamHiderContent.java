@@ -21,6 +21,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Iterator;
 
+import be.nabu.libs.http.api.HTTPEntity;
 import be.nabu.libs.types.MarshalRuleFactory;
 import be.nabu.libs.types.api.ComplexContent;
 import be.nabu.libs.types.api.ComplexType;
@@ -52,7 +53,11 @@ public class StreamHiderContent implements ComplexContent {
 	}
 
 	private Object process(Object object) {
-		if (object instanceof ComplexContent) {
+		// http entities should not be serialized
+		if (object instanceof HTTPEntity) {
+			return null;
+		}
+		else if (object instanceof ComplexContent) {
 			return new StreamHiderContent((ComplexContent) object);
 		}
 		else if (object instanceof Iterable) {
