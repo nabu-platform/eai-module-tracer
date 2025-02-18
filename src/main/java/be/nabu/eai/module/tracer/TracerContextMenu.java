@@ -658,7 +658,17 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								}
 							}
 						});
-						box.getChildren().add(showInput);
+						Button copyInput = new Button();
+						copyInput.setGraphic(MainController.loadGraphic("edit-copy.png"));
+						copyInput.getStyleClass().add("small-button");
+						HBox.setMargin(copyInput, new Insets(0, 0, 0, 5));
+						copyInput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+							@Override
+							public void handle(ActionEvent event) {
+								MainController.copy(message.getInput());
+							}
+						});
+						box.getChildren().addAll(showInput, copyInput);
 					}
 					if (message.getOutput() != null) {
 						Button showOutput = new Button("Output");
@@ -692,7 +702,17 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								}
 							}
 						});
-						box.getChildren().add(showOutput);
+						Button copyOutput = new Button();
+						copyOutput.setGraphic(MainController.loadGraphic("edit-copy.png"));
+						copyOutput.getStyleClass().add("small-button");
+						HBox.setMargin(copyOutput, new Insets(0, 0, 0, 5));
+						copyOutput.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+							@Override
+							public void handle(ActionEvent event) {
+								MainController.copy(message.getOutput());
+							}
+						});
+						box.getChildren().addAll(showOutput, copyOutput);
 					}
 					if (message.getException() != null) {
 						Button showError = new Button("Exception");
