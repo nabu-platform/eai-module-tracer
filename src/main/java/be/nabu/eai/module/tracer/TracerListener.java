@@ -678,7 +678,7 @@ public class TracerListener implements ServerListener {
 					message.setFrom(((Link) step).getFrom());
 					message.setTo(((Link) step).getTo());
 					message.setFixed(((Link) step).isFixedValue());
-					message.setMasked(((Link) step).isMask());
+					message.setMasked(((Link) step).getMask());
 				}
 				else if (step instanceof Throw) {
 					message.setCode(((Throw) step).getCode());
