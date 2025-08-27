@@ -548,6 +548,7 @@ public class TracerListener implements ServerListener {
 					// when marshalling binary data, this may be necessary to avoid issues (e.g. for binary file uploads, the raw http requests)
 					// IMPORTANT: currently we do NOT allow nil characters on unmarshalling meaning they will "disappear" when viewed in developer. this is currently acceptable but may need to be further revised in the future
 					binding.setAllowNilCharacter(true);
+					binding.setMarshalExplicitNullValues(true);
 					ByteArrayOutputStream output = new ByteArrayOutputStream();
 					binding.marshal(output, content);
 					TraceMessage message = newMessage(traceType);
@@ -590,6 +591,7 @@ public class TracerListener implements ServerListener {
 				content = new StreamHiderContent(content);
 //				XMLBinding binding = new XMLBinding(type, charset);
 				JSONBinding binding = new JSONBinding(type, charset);
+				binding.setMarshalExplicitNullValues(true);
 				ByteArrayOutputStream output = new ByteArrayOutputStream();
 				try {
 					binding.marshal(output, content);
