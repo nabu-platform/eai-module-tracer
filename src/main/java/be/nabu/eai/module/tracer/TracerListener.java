@@ -40,6 +40,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import be.nabu.eai.repository.EAIResourceRepository;
+import be.nabu.eai.repository.impl.StreamHiderContent;
 import be.nabu.eai.server.Server;
 import be.nabu.eai.server.api.ServerListener;
 import be.nabu.libs.authentication.api.Token;
