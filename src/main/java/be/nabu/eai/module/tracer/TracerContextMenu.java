@@ -24,14 +24,20 @@ import java.net.CookiePolicy;
 import java.nio.charset.Charset;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
+
+import javafx.animation.PauseTransition;
 
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
@@ -69,6 +75,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.util.Callback;
+import javafx.util.Duration;
 
 import javax.xml.bind.JAXBContext;
 
@@ -218,14 +225,56 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 								VBox.setVgrow(scroll, Priority.ALWAYS);
 								VBox.setVgrow(searchBox, Priority.NEVER);
 								
-								search.textProperty().addListener(new ChangeListener<String>() {
-									@Override
-									public void changed(ObservableValue<? extends String> arg0, String arg1, String arg2) {
-										unhighlight(requestTree);
-										if (arg2 != null && !arg2.trim().isEmpty()) {
-											highlight(requestTree, arg2);
+								Map<TreeCell<TraceMessage>, Boolean> expandedBeforeSearch = new HashMap<TreeCell<TraceMessage>, Boolean>();
+								Set<TreeCell<TraceMessage>> searchExpanded = new HashSet<TreeCell<TraceMessage>>();
+								Set<TreeCell<TraceMessage>> highlighted = new HashSet<TreeCell<TraceMessage>>();
+								PauseTransition searchDelay = new PauseTransition(Duration.millis(300));
+								int[] searchVersion = { 0 };
+								searchDelay.setOnFinished(e -> {
+									String text = search.getText().trim();
+									if (text.isEmpty()) {
+										clearSearch(highlighted, searchExpanded);
+										for (Map.Entry<TreeCell<TraceMessage>, Boolean> entry : expandedBeforeSearch.entrySet()) {
+											entry.getKey().expandedProperty().set(entry.getValue());
 										}
+										expandedBeforeSearch.clear();
 									}
+									else {
+										if (expandedBeforeSearch.isEmpty()) {
+											rememberExpansion(requestTree.getRootCell(), expandedBeforeSearch);
+										}
+										clearSearch(highlighted, searchExpanded);
+										for (TreeCell<TraceMessage> cell : expandedBeforeSearch.keySet()) {
+											if (cell.getParent() != null) {
+												cell.expandedProperty().set(false);
+											}
+										}
+										Deque<TreeItem<TraceMessage>> pending = new ArrayDeque<TreeItem<TraceMessage>>();
+										pending.add(requestTree.rootProperty().get());
+										int version = searchVersion[0];
+										Runnable batch = new Runnable() {
+											@Override
+											public void run() {
+												if (version != searchVersion[0]) {
+													return;
+												}
+												for (int i = 0; i < 100 && !pending.isEmpty(); i++) {
+													TreeItem<TraceMessage> item = pending.removeFirst();
+													highlight(requestTree, item, text, highlighted, searchExpanded);
+													pending.addAll(item.getChildren());
+												}
+												if (!pending.isEmpty()) {
+													Platform.runLater(this);
+												}
+											}
+										};
+										batch.run();
+									}
+								});
+								search.textProperty().addListener((observable, previous, current) -> {
+									searchVersion[0]++;
+									searchDelay.stop();
+									searchDelay.playFromStart();
 								});
 								
 //								pane.prefWidthProperty().bind(scroll.widthProperty());
@@ -393,67 +442,55 @@ public class TracerContextMenu implements EntryContextMenuProvider {
 		});
 	}
 	
-	private static void highlight(Tree<TraceMessage> tree, String text) {
-		highlight(tree.getRootCell(), text);
-	}
-	
-	private static void highlight(TreeCell<TraceMessage> cell, String text) {
-		cell.getCellValue().getNode().getStyleClass().remove("highlightedStep");
-		TraceMessage traceMessage = cell.getItem().itemProperty().get();
-		if (text != null && !text.trim().isEmpty()) {
-			Step step = ((TraceTreeItem) cell.getItem()).getStep();
-			boolean matches = false;
-			if (step != null && VMServiceGUIManager.matches(step, text, false)) {
-				matches = true;
-			}
-			else if (step == null) {
-				if (traceMessage.getReport() != null && traceMessage.getReport().toLowerCase().contains(text.toLowerCase())) {
-					matches = true;
-				}
-				else if (traceMessage.getServiceId() != null && traceMessage.getServiceId().toLowerCase().contains(text.toLowerCase())) {
-					matches = true;
-				}
-				else if (traceMessage.getInput() != null && traceMessage.getInput().toLowerCase().contains(text.toLowerCase())) {
-					matches = true;
-				}
-				else if (traceMessage.getOutput() != null && traceMessage.getOutput().toLowerCase().contains(text.toLowerCase())) {
-					matches = true;
-				}
-			}
-			if (cell.getChildren() != null && !cell.getChildren().isEmpty()) {
-				for (TreeCell<TraceMessage> child : cell.getChildren()) {
-					highlight(child, text);
-				}
-			}
-			// children but none of them are shown in the tree (e.g. a match in a link inside a map step)
-			else if (text != null && !text.trim().isEmpty() && step instanceof StepGroup && VMServiceGUIManager.matches(step, text, true)) {
-				matches = true;
-			}
-			
-			if (matches) {
-				if (!cell.getCellValue().getNode().getStyleClass().contains("highlightedStep")) {
-					cell.getCellValue().getNode().getStyleClass().add("highlightedStep");
-				}
-				cell.show();
-			}
+	private static void rememberExpansion(TreeCell<TraceMessage> cell, Map<TreeCell<TraceMessage>, Boolean> expanded) {
+		expanded.put(cell, cell.expandedProperty().get());
+		for (TreeCell<TraceMessage> child : cell.getChildren()) {
+			rememberExpansion(child, expanded);
 		}
 	}
-	
-	private static void unhighlight(Tree<TraceMessage> tree) {
-		unhighlight(tree.getRootCell());
-	}
-	
-	private static void unhighlight(TreeCell<TraceMessage> cell) {
-		cell.getCellValue().getNode().getStyleClass().remove("highlightedStep");
-		// don't collapse the root but collapse everything else so we only have expanded that which has a match afterwards
-		if (cell.getParent() != null && cell.expandedProperty().get()) {
+
+	private static void clearSearch(Set<TreeCell<TraceMessage>> highlighted, Set<TreeCell<TraceMessage>> searchExpanded) {
+		for (TreeCell<TraceMessage> cell : highlighted) {
+			cell.getCellValue().getNode().getStyleClass().remove("highlightedStep");
+		}
+		highlighted.clear();
+		for (TreeCell<TraceMessage> cell : searchExpanded) {
 			cell.expandedProperty().set(false);
 		}
-		if (cell.getChildren() != null && !cell.getChildren().isEmpty()) {
-			for (TreeCell<TraceMessage> child : cell.getChildren()) {
-				unhighlight(child);
+		searchExpanded.clear();
+	}
+
+	private static void highlight(Tree<TraceMessage> tree, TreeItem<TraceMessage> item, String text,
+			Set<TreeCell<TraceMessage>> highlighted, Set<TreeCell<TraceMessage>> searchExpanded) {
+		TraceTreeItem traceItem = (TraceTreeItem) item;
+		TraceMessage message = item.itemProperty().get();
+		Step step = traceItem.getStep();
+		String lower = text.toLowerCase(Locale.ROOT);
+		boolean matches = step != null && VMServiceGUIManager.matches(step, Pattern.quote(text), false);
+		matches |= contains(item.getName(), lower) || contains(message.getComment(), lower)
+			|| contains(message.getServiceId(), lower) || contains(message.getStepId(), lower)
+			|| contains(message.getReport(), lower) || contains(message.getInput(), lower)
+			|| contains(message.getOutput(), lower) || contains(message.getException() == null ? null : message.getException().toString(), lower);
+		if (item.getChildren().isEmpty() && step instanceof StepGroup) {
+			matches |= VMServiceGUIManager.matches(step, Pattern.quote(text), true);
+		}
+		if (matches) {
+			TreeCell<TraceMessage> cell = tree.getTreeCell(item);
+			cell.getCellValue().getNode().getStyleClass().add("highlightedStep");
+			highlighted.add(cell);
+			TreeCell<TraceMessage> parent = cell.getParent();
+			while (parent != null) {
+				if (!parent.expandedProperty().get()) {
+					parent.expandedProperty().set(true);
+					searchExpanded.add(parent);
+				}
+				parent = parent.getParent();
 			}
 		}
+	}
+
+	private static boolean contains(String value, String lower) {
+		return value != null && value.toLowerCase(Locale.ROOT).contains(lower);
 	}
 
 	private static ThreadLocal<SimpleDateFormat> formatter = new ThreadLocal<SimpleDateFormat>();
